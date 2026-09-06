@@ -88,18 +88,33 @@ This is the rule that matters most as the code grows.
 
 **The directory a file is in is which side of the boundary it is on.** That is
 the whole reason for the layout, and it is why there is no `src/`: one folder
-called "the source" would put the first two of these in the same bag and say
-nothing.
+called "the source" would put the portable directories and the platform ones
+in the same bag and say nothing.
 
 - **`ui/` — portable.** `ui.c`, `ui.h` and the three fonts. LVGL and the C
   standard library only. No SDL, no ESP-IDF, no `driver/` headers. Both builds
   compile these files *unchanged*, from where they sit.
+- **`voice/` — portable, and one notch stricter.** `turn.c` and `turn.h` are
+  everything about a turn that is not a device: the words the watch answers
+  to, the gate that ends a turn, the JSON, the base64, the WAV and both
+  request bodies. The C standard library and *nothing else* — not even LVGL.
+  `voice.h` beside them is the five-function contract the two platform halves
+  both implement. Both builds compile `turn.c` unchanged.
 - **`host/` — host only.** `main.c` for the SDL window, input devices, tick
-  source and service loop; `voice.c` for the microphone, the two speech
-  services and the speaker; `test_ui.c` for the headless renderer.
-- **`firmware/main/` — device only.** The same four jobs against the panel,
-  plus the clock the board cannot read for itself, split over `main.c`,
-  `board.c` and `net.c`. It replaces `host/main.c` rather than adding to it.
+  source and service loop; `voice.c` for the SDL microphone, the socket and
+  the SDL speaker; `test_ui.c` for the headless renderer.
+- **`firmware/main/` — device only.** The same jobs against the panel and the
+  board's own codecs, plus the clock the board cannot read for itself, split
+  over `main.c`, `board.c`, `net.c` and `voice.c`. It replaces `host/main.c`
+  and `host/voice.c` rather than adding to them.
+
+**Why `voice/` exists at all**: `host/voice.c` and `firmware/main/voice.c` are
+the same loop against two different sets of hardware, and almost everything
+interesting in it is neither. The wake phrase in particular *must* be one
+list — a watch that answers to a different name than the simulator does makes
+the simulator worthless — and so must the gate, the endpointing and the two
+bodies that go on the wire. So they are one file, and what is left in each
+platform half is an audio device, an HTTP transport and a thread.
 
 `lv_conf.h` and `lvgl/` stay at the root and cannot follow the sources into
 `ui/`. LVGL's own `env_support/cmake/esp.cmake` registers `${LVGL_ROOT_DIR}/..`
@@ -129,25 +144,27 @@ Keep it one-directional. A callback out of `ui.c` is a sign the UI is being
 asked to drive the platform rather than be told by it, and the button was the
 only thing that ever wanted one.
 
-Two checks settle it, one on each side. The host's is the symbol list — compile
-the portable side alone and look at what it leaves undefined. Anything but
-`lv_*` and libc is a leak:
+Two checks settle it, one on each side. The host's is the symbol list —
+compile each portable directory alone and look at what it leaves undefined:
 
     clang -std=c11 -DLV_CONF_INCLUDE_SIMPLE -I. -c ui/ui.c -o /tmp/ui.o
-    nm -u /tmp/ui.o | grep -i 'sdl\|esp_'    # must print nothing
+    nm -u /tmp/ui.o | grep -i 'sdl\|esp_'      # must print nothing
+    clang -std=c11 -Ivoice -c voice/turn.c -o /tmp/turn.o
+    nm -u /tmp/turn.o | grep -i 'sdl\|esp_'    # must print nothing
 
-`make check` runs exactly this, plus `-Wall -Wextra -Werror` on the same
-compile. Today that list is `lv_*` plus `time` and `localtime_r`, and nothing
-else — `voice.c` is a whole voice loop and none of it shows up here, which is
-the point. Do
+`make check` runs exactly this, plus `-Wall -Wextra -Werror` on both compiles.
+Today `ui.o` leaves `lv_*` plus `time` and `localtime_r`, and `turn.o` leaves
+thirteen libc symbols and not one more — no LVGL, no sockets, no logging. Do
 not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
 
-The firmware's is the build itself: `firmware/components/kai_ui/` compiles the
-same four files out of `ui/` and `REQUIRES lvgl` and nothing else, so an
-ESP-IDF header in `ui.c` is not on its include path and the build stops. It
-never names `host/` at all, which is the same rule stated as a directory it
-cannot reach.
+The firmware's is the build itself. `firmware/components/kai_ui/` compiles the
+same four files out of `ui/` and `REQUIRES lvgl` and nothing else;
+`firmware/components/kai_turn/` compiles `voice/turn.c` and `REQUIRES` nothing
+at all, which is that file's claim about itself written into the build. An
+ESP-IDF header in either would not be on its component's include path and the
+build stops. Neither names `host/`, which is the same rule stated as a
+directory they cannot reach.
 
 ## Build and run
 
@@ -216,15 +233,17 @@ Each of these was a real failure or a real warning, not a preference:
 
 ## The firmware
 
-`firmware/` is the ESP-IDF project. Three files of its own, and everything
+`firmware/` is the ESP-IDF project. Four files of its own, and everything
 else shared with the simulator:
 
 | | |
 |---|---|
-| `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`. The counterpart of `host/main.c`, and deliberately the same shape |
-| `firmware/main/board.c` | the QSPI panel and the touch controller, handed to LVGL |
+| `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`, `ui_view_set()`. The counterpart of `host/main.c`, and deliberately the same shape |
+| `firmware/main/board.c` | the QSPI panel and the touch controller handed to LVGL, and the two audio codecs handed to `voice.c` |
 | `firmware/main/net.c` | WiFi and SNTP, both off unless an SSID is configured |
+| `firmware/main/voice.c` | the device half of the voice loop: the codecs, `esp_http_client`, and a task. The counterpart of `host/voice.c`, and the same shape again |
 | `firmware/components/kai_ui/` | a `CMakeLists.txt` and nothing else: it compiles `ui.c` and the three fonts out of the repo's `ui/` |
+| `firmware/components/kai_turn/` | the same trick for `voice/turn.c`, and it `REQUIRES` nothing at all |
 
 **`lvgl/` is the same checkout, not a second one.** `firmware/CMakeLists.txt`
 puts the repo root's `lvgl/` on `EXTRA_COMPONENT_DIRS` rather than letting the
@@ -239,6 +258,34 @@ top of that file, and just as quiet. `sdkconfig.defaults` sets it to `n`. If it
 ever goes back, LVGL's Kconfig defaults leave `LV_FONT_MONTSERRAT_40` off,
 `ui.c` names it for the weekday, and the build fails at the link instead of
 booting to a face with a blank line under the date.
+
+### The audio
+
+Two chips, both in `board.c` beside the panel and for the same reason — their
+pin numbers cannot be derived from anything:
+
+| | |
+|---|---|
+| **ES8311** | the speaker. I2S `DOUT` on GPIO40, and the power amplifier on GPIO46, which the codec driver raises when the device opens so nothing hisses between replies |
+| **ES7210** | the microphones. I2S `DSIN` on GPIO42 |
+
+They share one duplex I2S bus — MCLK 16, BCLK 41, WS 45 — and they share the
+I2C bus the touch controller already sits on, GPIO14/15. Two consequences,
+both load-bearing:
+
+- **`board_touch_init()` has to run before `board_audio_init()`**, because it
+  is what creates that I2C bus. `app_main` calls them in that order and the
+  audio side refuses to come up if it finds no bus.
+- **One bus is one clock, so the two codecs cannot both be open** at different
+  rates. That is why the board API is open/close rather than always-on:
+  `board_speaker_open()` closes the microphone and vice versa. The loop is
+  half duplex anyway, so this costs nothing that was not already gone — and it
+  is the same pause the simulator makes.
+
+`BOARD_MIC_GAIN_DB` is the one number here worth suspecting. The gate in
+`voice/turn.c` was measured against a Mac's own microphone, so if the watch
+never hears a sentence *end*, the gain is too high; if it never hears one
+start, too low.
 
 ### The panel
 
@@ -294,15 +341,15 @@ The same `ui_status_t` the simulator fakes, filled from what is actually there:
 |---|---|
 | `wifi_up` | real, from the station's `IP_EVENT_STA_GOT_IP` |
 | `battery_pct` | `-1`. There is no fuel gauge on this board, and the UI already draws `--%` for a charge it does not know — the honest reading, not an invented one |
-| `listening`, `speaking` | `false` until there is an audio path behind them: the ES8311 codec and a wake-word engine. The simulator already fills both for real — see the voice loop |
+| `listening`, `speaking` | real, from `voice.c` — the ES7210 in front of the microphones and the ES8311 in front of the speaker |
 
-Each is one line in `status_tick()` when it arrives, and none of it reaches
-into `ui.c`. That is the point of the struct.
+The charge is the only invented one left, and it is one line in
+`status_tick()` when a gauge arrives. None of it reaches into `ui.c`. That is
+the point of the struct.
 
-**The assistant's face waits on the same thing.** With no button on either
-face and nothing on this board that can yet hear its name, `ui_view_set()` has
-no caller in the firmware and the watch stays a clock. It is one more line
-beside those, once ESP-SR is listening.
+**The assistant's face comes from the same place.** `view_tick()` polls
+`voice_awake()` into `ui_view_set()` ten times a second, exactly as the
+simulator's does — see the voice loop below.
 
 ### The clock
 
@@ -436,10 +483,25 @@ sits there, and the centred stack clears them by more than 80 px.
 
 ## The voice loop
 
-`host/voice.c` is the simulator's audio path, and the reason the microphone
-and speaker corners are no longer faked. It is host-only, like `main.c`: the board
-has no codec wired up and no wake word yet, so the Mac's own microphone and
-speakers do the job the ES8311 will do later.
+One loop, three files:
+
+| | |
+|---|---|
+| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, and both request bodies. Compiled into both builds unchanged |
+| `host/voice.c` | the SDL microphone, a hand-written socket, the SDL speaker, an `SDL_Thread` |
+| `firmware/main/voice.c` | the ES7210, `esp_http_client`, the ES8311, a FreeRTOS task |
+
+The two platform halves are deliberately the same shape: the same five
+functions out of `voice/voice.h`, the same record/transcribe/answer/play pass
+in the same order, the same three booleans published to the loop that draws.
+Read one and you have read the other.
+
+**Almost nothing in a turn is a device**, which is what `voice/turn.c` is for.
+It went in when the firmware grew a voice, because the alternative was two
+copies of the wake-phrase table — and a watch that answers to a different name
+than the simulator does makes the simulator worthless. The gate, the
+endpointing, the goodbye and the exact bytes that go on the wire are in there
+for the same reason.
 
 It is a translation of four packages of `~/workspace/kai/orchestrator`, which
 is the same loop in Go:
@@ -449,7 +511,7 @@ is the same loop in Go:
 | `internal/parakeet` | `transcribe()` — a multipart POST, one field read back |
 | `internal/chatterbox` | `synthesise()` — a JSON POST carrying the clip to clone |
 | `internal/echo` | `reply()` — the answer is the question, word for word |
-| `internal/app`'s turn state | an SDL thread and two atomics |
+| `internal/app`'s turn state | a thread and three atomics, once per platform |
 
 **The answer is the question said back.** That is a mode rather than a
 placeholder — it is the shortest path through the whole pipeline, so a turn
@@ -461,18 +523,22 @@ it cuts a streaming reply at sentence seams so speech starts before the text
 is finished, and with an echo there is nothing to stream.
 
 **The transcriber is the wake-word engine.** There is no button and no
-wake-word model on a Mac, so the microphone is open from start-up, every
-utterance in the room is recorded and transcribed, and the watch wakes when
-its own name comes back in the text. `WAKE` is a table rather than one string
-because Parakeet has never been shown that name and spells it a few different
-ways; it is the greeting that is matched, not the name alone, or *Kaiser* and
-half the German news would wake the watch. Whatever follows the greeting is
-the first turn, so `Hey Kai, hallo` wakes it and answers `hallo` in one go.
+wake-word model, so the microphone is open from start-up, every utterance in
+the room is recorded and transcribed, and the watch wakes when its own name
+comes back in the text. `WAKE` in `voice/turn.c` is a table rather than one
+string because Parakeet has never been shown that name and spells it a few
+different ways; it is the greeting that is matched, not the name alone, or
+*Kaiser* and half the German news would wake the watch. Whatever follows the
+greeting is the first turn, so `Hey Kai, hallo` wakes it and answers `hallo`
+in one go.
 
-This is the one part of the loop the device will not copy. An ESP32-S3 runs
-ESP-SR locally and opens a connection only once it has heard its name — the
-host sends everything because it has nothing better, not because that is the
-design.
+**On the host this is the only option; on the device it is a choice, and the
+first one worth revisiting.** ESP-SR would hear the name on the S3 itself and
+open a connection only then — less radio, less battery, and no room audio
+leaving the watch. What stops it today is that WakeNet's models are a fixed
+set — *Hi ESP*, *Alexa* and so on — and none of them is this watch's name. So
+it is a trained model away rather than a flag away, and until then the watch
+sends what it hears.
 
 **Two ways back to the clock, because a misheard word must not trap you.** A
 goodbye — `tschüss`, `quit`, `stop` — matched against the whole transcript
@@ -482,14 +548,17 @@ rather than as a substring, so *stopp mal die Musik* is a thing to answer; and
 and `VOICE_WAIT_FOREVER` is the same function asleep, where there is nothing
 to time out of.
 
-**Everything runs on its own thread.** A turn costs seconds and LVGL is single
-threaded, so the loop cannot live in `lv_timer_handler()`. It publishes three
-booleans through SDL atomics. `status_tick()` in `main.c` reads two of them
-once a second and `ui_status_set()` carries them the rest of the way;
-`view_tick()` reads `voice_awake()` ten times a second and hands it to
-`ui_view_set()`, which is idempotent so nine of those ten cost nothing. The
-faster timer is the point: the eyes come up as the wake phrase lands rather
-than up to a second later.
+**Everything runs on its own thread**, an `SDL_Thread` here and a FreeRTOS
+task there. A turn costs seconds and LVGL is single threaded, so the loop
+cannot live in `lv_timer_handler()` on either side — and because it never
+does, there is still no lock anywhere near LVGL. It publishes three booleans
+through atomics. `status_tick()` reads two of them once a second and
+`ui_status_set()` carries them the rest of the way; `view_tick()` reads
+`voice_awake()` ten times a second and hands it to `ui_view_set()`, which is
+idempotent so nine of those ten cost nothing. The faster timer is the point:
+the eyes come up as the wake phrase lands rather than up to a second later.
+Both `main.c` files have exactly these two timers with exactly these two
+periods.
 
 `voice_listening()` is `awake && recording`, not `recording` alone. The
 microphone really is open the whole time, but a corner that is always lit says
@@ -514,11 +583,13 @@ Five things about it are load-bearing:
   `500` — *"No conditionals available"* — to every request that carries no clip
   to clone, so `voices/kai.opus` and its transcript in `voices/kai.txt` are not
   optional. They are gitignored: the clip is a recording of a person and this
-  repository is licensed. Without them the loop does not start and the two
-  corners stay dim, the same answer the firmware gives an unconfigured SSID.
-  Copy them from `~/workspace/kai/orchestrator/voices/`. Without them the
-  watch is a clock and nothing else: saying its name does nothing, because
-  nothing is listening for it.
+  repository is licensed. Copy them from
+  `~/workspace/kai/orchestrator/voices/`. Without them the loop does not start
+  at all: the watch is a clock, saying its name does nothing because nothing
+  is listening for it, and the two corners stay dim. **The firmware links the
+  same two files into flash** — `main/CMakeLists.txt` does that only
+  `if(EXISTS ...)`, so a fresh clone builds without them and says so
+  (`KAI: no voices/kai.opus`) rather than failing.
 - **The clip and its words travel together.** The server aligns one against
   the other and rejects the audio on its own.
 - **16 kHz mono in, whatever comes back out.** `sdl2-compat` opens the
@@ -542,16 +613,32 @@ Five things about it are load-bearing:
   press and started being open the whole time — before that, a window closed on
   the clock face never had a device to pull out.
 
+**The watch needs three things before it says a word**: an SSID, a server
+address, and that clip. All three are off by default and each one missing
+gives the same answer — a clock with two dim corners. `idf.py -C firmware
+menuconfig`, under **KAI watch**: `CONFIG_KAI_VOICE_HOST` is an address *on
+the network the watch joins*, not `127.0.0.1`, which on the watch means the
+watch.
+
+Because they default off, the interesting half of `firmware/main/voice.c` is
+folded away by the compiler in a default build — `voice_start()` returns at
+its first line and the linker drops the rest. A build that only proves the
+default configuration is not proof the voice path compiles. Set a host in
+`sdkconfig` before believing a green firmware build.
+
 Measured on this machine, against the oMLX server at `127.0.0.1:8000`:
 transcription answers in about **0.9 s** for 3 s of speech, and synthesis
 takes **2.6-3.3 s** to produce 3 s of it — roughly real time, which is the
 number the chunker exists to hide once there is a model writing the reply.
 
-None of it is in `check`. The gate has to stay runnable on a Mac with nothing
-on it, so `kai_test` never links `voice.c` — and `ui/` cannot reach it at
-all, and the loop itself needs no
-configuration: the endpoint and both model names are `#define`s at the top of
-the file.
+None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
+with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
+all. `voice/turn.c` *is* in `check`, on both counts: it compiles clean under
+`-Werror` and its symbol list is inspected, which is exactly what it earns by
+being the file both platforms share. The server address is the one thing that
+is configuration — a `#define` on the host, Kconfig on the device — and the
+model names and the language are neither, because they are the same decision
+twice and live in `turn.h`.
 
 ## Verifying a render without a screenshot
 

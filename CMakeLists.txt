@@ -54,12 +54,20 @@ target_link_libraries(kai_ui PUBLIC lvgl)
 # only thing they may reach into ui/ for.
 target_include_directories(kai_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ui)
 
-# voice.c is host-only, like main.c: it is the microphone, the two speech
-# services and the speaker. Deliberately not in kai_ui and not in kai_test —
-# the boundary check compiles the portable half alone, and `make test` has to
-# pass with no oMLX server and no audio device anywhere near it.
+# The portable half of the voice loop, its own target for the same reason
+# kai_ui is one: the firmware compiles this very file out of voice/. Stricter
+# than kai_ui, though — it links nothing at all, not even LVGL, so the target
+# has no target_link_libraries line and that is deliberate.
+add_library(kai_turn STATIC voice/turn.c)
+target_include_directories(kai_turn PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/voice)
+
+# host/voice.c is host-only, like main.c: the SDL microphone, the socket and
+# the SDL speaker, which is all that is left once voice/turn.c has the words,
+# the gate and the two request bodies. Deliberately not in kai_ui and not in
+# kai_test — `make test` has to pass with no oMLX server and no audio device
+# anywhere near it.
 add_executable(kai_sim host/main.c host/voice.c)
-target_link_libraries(kai_sim PRIVATE kai_ui PkgConfig::SDL2)
+target_link_libraries(kai_sim PRIVATE kai_ui kai_turn PkgConfig::SDL2)
 
 # Renders the UI into a byte array and checks what came out. `make test`.
 add_executable(kai_test host/test_ui.c)

@@ -25,4 +25,21 @@ menu "KAI watch"
             with, so the zone is compiled in. The default is central Europe
             with EU daylight saving.
 
+    config KAI_VOICE_HOST
+        string "Speech server address"
+        default ""
+        help
+            Where the oMLX server that transcribes and speaks is, as an
+            address on the network the watch joins — not 127.0.0.1, which on
+            the watch means the watch. Leave it empty and the assistant never
+            starts: the watch is a clock, and the microphone and speaker
+            corners stay dim, which is what that dimming is for.
+
+            It needs an SSID above as well. Both services are on the other
+            end of the radio, so no network means no assistant.
+
+    config KAI_VOICE_PORT
+        int "Speech server port"
+        default 8000
+
 endmenu

@@ -13,8 +13,9 @@ building the watch face.
   ESP-IDF plus the two drivers for this board's panel and touch
   controller, and nothing else.
 - LVGL stays pinned to a release tag. Never `master`.
-- `ui/` must not reference SDL or ESP-IDF; it compiles unchanged into the
-  firmware. Host-only code lives in `host/`; the directory is the boundary.
+- `ui/` and `voice/` must not reference SDL or ESP-IDF; both compile unchanged
+  into the firmware, and `voice/` may not reference LVGL either. Host-only
+  code lives in `host/`; the directory is the boundary.
 - The simulator window stays 410 x 502, 1:1.
 - The hour and minute groups stay separate objects, symmetric about the
   centre: they are the assistant's two eyes.
@@ -42,9 +43,12 @@ layout — turns the fast loop back into guesswork.
 
 - `make firmware` builds `firmware/` against the repo root's own `lvgl/` and
   `lv_conf.h`, with `ui/`'s four files compiled from where they sit.
-- The panel, the touch and the platform readouts reach the UI only through
-  `ui_build()`, `ui_status_set()` and `ui_view_set()`, and nothing reaches back
-  out of it.
+- The panel, the touch, the codecs and the platform readouts reach the UI only
+  through `ui_build()`, `ui_status_set()` and `ui_view_set()`, and nothing
+  reaches back out of it.
+- The watch hears its own name on the board's own microphone and answers
+  through its own speaker, against the same two services the simulator uses
+  and the same words in `voice/turn.c`.
 - `make check` still passes on a machine with no ESP-IDF on it.
 
 # The voice loop
@@ -53,11 +57,12 @@ layout — turns the fast loop back into guesswork.
 back, so the two views and the microphone and speaker corners all show
 something true.
 
-**Why.** The board has no codec wired up and no wake word, and the two
-readouts that stand for them were invented by a timer. A loop that runs on the
-host against the real speech services is what turns them into a reading —
-and it is the shortest path through the whole pipeline, so a turn that breaks
-there breaks everywhere.
+**Why.** The two readouts that stand for the microphone and the speaker were
+invented by a timer. A loop against the real speech services is what turns
+them into a reading — and it is the shortest path through the whole pipeline,
+so a turn that breaks there breaks everywhere. It runs on both: the simulator
+so the loop can be worked on without flashing, the watch because that is the
+point.
 
 **Done means.**
 

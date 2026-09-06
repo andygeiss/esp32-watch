@@ -16,15 +16,18 @@ build:
 
 # Default. Every gate, in this order, against the working tree. Run before
 # every commit. The lv_conf.h grep is first because it is instant and because
-# a dead lv_conf.h still builds, it just builds the wrong thing. The last two
-# lines are the host/device boundary check: ui.c compiled alone must leave
-# nothing but lv_* and libc undefined.
+# a dead lv_conf.h still builds, it just builds the wrong thing. The four
+# lines after the build are the host/device boundary check, once per portable
+# directory: ui.c compiled alone must leave nothing but lv_* and libc
+# undefined, and turn.c nothing but libc.
 check:
 	test "$$(grep -c '^#if 1 /\* Set this' lv_conf.h)" = 1
 	cmake -S . -B build
 	cmake --build build -j
 	clang -std=c11 -Wall -Wextra -Werror -DLV_CONF_INCLUDE_SIMPLE -I. -c ui/ui.c -o build/ui-portable.o
 	! nm -u build/ui-portable.o | grep -i 'sdl\|esp_'
+	clang -std=c11 -Wall -Wextra -Werror -Ivoice -c voice/turn.c -o build/turn-portable.o
+	! nm -u build/turn-portable.o | grep -i 'sdl\|esp_'
 	./build/kai_test
 
 # The same gates against the commit: a file never added, such as the generated

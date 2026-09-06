@@ -90,16 +90,19 @@ transition, animation, morphing._
 at 1:1, which is the whole reason the simulator is worth having. _Avoid:
 screen, display, LCD._
 
-**Portable half** — `ui/`: `ui.c`, `ui.h` and the three generated fonts, the
-files both builds compile unchanged. LVGL and the C standard library only. Its
-opposite number is `host/`, and there is no `src/` holding both. _Avoid:
-shared code, common, core._
+**Portable half** — the files both builds compile unchanged. There are two
+directories of them: `ui/`, which may call LVGL and the C standard library,
+and `voice/`, which may call the C standard library and nothing else. Their
+opposite numbers are `host/` and `firmware/main/`, and there is no `src/`
+holding any of it. _Avoid: shared code, common, core._
 
 **Reference clip** — `voices/kai.opus` and the transcript beside it, the
 recording the synthesiser borrows a voice from.
 `chatterbox-multilingual-v3` ships no voices of its own and answers 500
 without one, so it is a prerequisite rather than a setting. Gitignored: it is
-a recording of a person. _Avoid: sample, voice file, speaker prompt._
+a recording of a person. The simulator reads it at start-up; the firmware
+links it into flash, and only if it is there. _Avoid: sample, voice file,
+speaker prompt._
 
 **Status** — the struct `ui_status_t` and its setter, how a fact the UI cannot
 reach for itself gets in: the charge, the radio, the microphone, the speaker.
@@ -128,14 +131,18 @@ interaction._
 views on it, and the morph is how it gets from one to the other. _Avoid:
 screen, page, mode._
 
-**Voice loop** — `host/voice.c`: the microphone, Parakeet, Chatterbox and the
-speaker, on a thread of its own. Host-only, and the reason the bottom two
-corners are no longer faked. _Avoid: audio pipeline, speech stack, assistant
-backend._
+**Voice loop** — the microphone, Parakeet, Chatterbox and the speaker, on a
+thread of its own, and the reason the bottom two corners are not faked. Three
+files: `voice/turn.c` is the portable half both builds share, `host/voice.c`
+drives SDL and a socket, `firmware/main/voice.c` drives the board's two codecs
+and `esp_http_client`. The two platform halves are the same shape on purpose.
+_Avoid: audio pipeline, speech stack, assistant backend._
 
 **Wake phrase** — `Hey Kai`, and the thing that puts the assistant view up.
-There is no wake-word engine on a Mac, so the microphone stays open, every
-utterance is transcribed, and the phrase is looked for in the text — `WAKE` is
-a table because the transcriber has never been shown the name and spells it
-several ways. Whatever follows it is the first turn. _Avoid: wake word, hotword,
-trigger._
+There is no wake-word engine on either build, so the microphone stays open,
+every utterance is transcribed, and the phrase is looked for in the text —
+`WAKE` in `voice/turn.c` is a table because the transcriber has never been
+shown the name and spells it several ways. Whatever follows it is the first
+turn. On the watch this is a choice rather than a necessity: ESP-SR would hear
+it locally, but none of WakeNet's models is this name. _Avoid: wake word,
+hotword, trigger._

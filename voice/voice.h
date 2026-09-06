@@ -1,15 +1,17 @@
 /**
  * @file voice.h
- * Host-only: the microphone, the two speech services, and the speaker.
+ * The voice loop, as its two platforms agree to present it.
  *
- * The simulator's stand-in for an audio path the board does not have yet.
- * It hears through SDL, transcribes with Parakeet, says the words back, and
- * plays the answer through SDL again — the shortest route through the whole
- * pipeline, so a turn that breaks here breaks everywhere.
+ * Five functions, implemented twice: host/voice.c against an SDL microphone,
+ * a socket and an SDL speaker, and firmware/main/voice.c against the board's
+ * ES7210, esp_http_client and its ES8311. Each main.c calls exactly this and
+ * never learns which one it linked. turn.h beside this is the other half —
+ * everything about a turn that is not a device, compiled into both.
  *
- * The microphone is open from start-up, because there is no wake-word engine
- * on a Mac: the transcriber is the wake-word engine, and the watch wakes when
- * its own name comes back in a transcript.
+ * The microphone is open from start-up and the transcriber is the wake-word
+ * engine: the watch wakes when its own name comes back in a transcript, and
+ * goes back to the clock on a goodbye or a stretch of silence. There is
+ * nothing to press on either face.
  *
  * Nothing in here may be reached from ui.c. The loop publishes three
  * booleans, main.c copies two into ui_status_t and hands the third to
@@ -25,8 +27,9 @@
 
 /**
  * Open the audio devices and start the worker thread. Safe to call when
- * there is no reference clip and no server: the loop stays quiet and the two
- * corners stay dim, which is the reading dimming is for.
+ * there is no reference clip and no server: the loop stays quiet, the watch
+ * stays a clock, and the two corners stay dim, which is the reading dimming
+ * is for. The firmware adds one more way to be quiet — no WiFi.
  */
 void voice_start(void);
 

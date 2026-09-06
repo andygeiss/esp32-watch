@@ -16,3 +16,10 @@ dependencies:
   # only resolves for a component that asks for it directly.
   espressif/esp_lcd_touch:
     version: "==1.2.1"
+  # The audio path: an ES8311 to the speaker and an ES7210 in front of the
+  # microphones, both on the I2C bus the touch controller already sits on.
+  # esp_codec_dev is the driver for both and the version Waveshare's own BSP
+  # for this board pins, which is the only reason to trust the register
+  # sequences inside it.
+  espressif/esp_codec_dev:
+    version: "==1.3.1"

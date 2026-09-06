@@ -12,6 +12,7 @@
 #include "board.h"
 #include "net.h"
 #include "ui.h"
+#include "voice.h"
 
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -24,38 +25,48 @@
 
 #define STATUS_PERIOD_MS 1000
 
+/* The view follows the voice loop, which runs in a task of its own, so it has
+ * to be polled: ui.c may only be touched from this one. Fast enough that the
+ * eyes come up as the wake phrase lands, rather than up to a second later
+ * with the status readouts. The simulator's loop has the same two numbers. */
+#define VIEW_PERIOD_MS 100
+
 static uint32_t tick_ms(void)
 {
     return (uint32_t) (esp_timer_get_time() / 1000);
 }
 
-/* What this board can answer, and what it cannot answer yet.
+/* What this board can answer, and what it cannot.
  *
- * The radio is real. The charge is not: there is no fuel gauge on this board,
- * so battery_pct stays negative and the corner reads `--%` — the honest
- * answer, and one the UI already draws. listening and speaking wait on the
- * audio path, the ES8311 codec and a wake-word engine, and stay dim until
- * there is something behind them. Each is one line here when it arrives; none
- * of it reaches into ui.c.
- *
- * The assistant's face waits on the same thing. With no button on either face
- * and nothing on this board that can hear its name yet, ui_view_set() has no
- * caller here and the watch stays a clock — one more line, beside these, once
- * ESP-SR is listening. The simulator already does the whole of it; see
- * host/voice.c. */
+ * The radio is real, and so are the microphone and the speaker now that
+ * voice.c has the ES7210 and the ES8311. The charge is not: there is no fuel
+ * gauge on this board, so battery_pct stays negative and the corner reads
+ * `--%` — the honest answer, and one the UI already draws. That last one is a
+ * single line here when a gauge arrives, and none of it reaches into ui.c.
+ * That is the point of the struct. */
 static void status_tick(lv_timer_t * timer)
 {
     ui_status_t status = {
         .battery_pct = -1,
         .charging    = false,
         .wifi_up     = net_is_up(),
-        .listening   = false,
-        .speaking    = false,
+        .listening   = voice_listening(),
+        .speaking    = voice_speaking(),
     };
 
     LV_UNUSED(timer);
 
     ui_status_set(&status);
+}
+
+/* Whether the assistant is awake, which is the whole of what decides which
+ * face is up. ui_view_set() is idempotent, so this hands it the same answer
+ * ten times a second and only the answer that changed is a morph. */
+static void view_tick(lv_timer_t * timer)
+{
+    LV_UNUSED(timer);
+
+    ui_view_set(voice_awake());
 }
 
 void app_main(void)
@@ -68,9 +79,18 @@ void app_main(void)
 
     ui_build();
     lv_timer_ready(lv_timer_create(status_tick, STATUS_PERIOD_MS, NULL));
+    lv_timer_ready(lv_timer_create(view_tick, VIEW_PERIOD_MS, NULL));
 
-    /* After the face is up, so the first frame does not wait on a radio. */
+    /* After the face is up, so the first frame does not wait on a radio.
+     *
+     * There is nothing to press: the loop listens for the watch's name for as
+     * long as there is a network and a server to ask, and saying it is what
+     * morphs the digits into eyes. Without an SSID, without a server, or
+     * without the reference clip compiled in, none of it starts and the watch
+     * is a clock with two dim corners. voice_start() has to come after
+     * board_touch_init(), which is what makes the I2C bus the codecs sit on. */
     net_start();
+    voice_start();
 
     /* Everything that touches LVGL runs from this one task — the timers, the
      * touch read, status_tick — so there is no lock to take and none to
