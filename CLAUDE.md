@@ -7,7 +7,9 @@ long-term goal is a retro clock face whose hour and minute digits morph into
 the two eyes of an assistant face — that morph is the point of the project, so
 nothing here may foreclose it.
 
-Read `SPEC.md` for the job, guardrails and definition of done.
+Read `SPEC.md` for the job, guardrails and definition of done, and
+`GLOSSARY.md` for the word this project uses for each thing. `README.md`
+is the short version of this file.
 
 ## Target hardware
 
