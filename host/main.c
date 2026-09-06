@@ -27,6 +27,12 @@
 
 #define STATUS_PERIOD_MS 1000
 
+/* The view follows the voice loop, which runs on a thread of its own, so it
+ * has to be polled: ui.c may only be touched from here. Fast enough that the
+ * eyes come up as the wake phrase lands, rather than up to a second later
+ * with the status readouts. */
+#define VIEW_PERIOD_MS 100
+
 /* The charge and the radio are still a stand-in: reading either on a Mac
  * means a framework this simulator has no business linking, and neither is
  * what the watch is for. The charge walks down to nearly empty and charges
@@ -60,6 +66,16 @@ static void status_tick(lv_timer_t * timer)
     ui_status_set(&status);
 }
 
+/* Whether the assistant is awake, which is the whole of what decides which
+ * face is up. ui_view_set() is idempotent, so this hands it the same answer
+ * ten times a second and only the answer that changed is a morph. */
+static void view_tick(lv_timer_t * timer)
+{
+    LV_UNUSED(timer);
+
+    ui_view_set(voice_awake());
+}
+
 int main(void)
 {
     SDL_SetMainReady();
@@ -79,15 +95,16 @@ int main(void)
 
     ui_build();
     lv_timer_ready(lv_timer_create(status_tick, STATUS_PERIOD_MS, NULL));
+    lv_timer_ready(lv_timer_create(view_tick, VIEW_PERIOD_MS, NULL));
 
-    /* The button is what wakes the assistant, so the two arrive together: the
-     * digits morph into eyes and the microphone opens on the same press. The
-     * loop is quiet without voices/kai.opus, and the corners stay dim.
+    /* There is nothing to press: the loop listens for the watch's name from
+     * the moment it starts, and saying it is what morphs the digits into
+     * eyes. Without voices/kai.opus the loop never starts, so the watch stays
+     * a clock and the two bottom corners stay dim.
      *
      * LV_SDL_DIRECT_EXIT means closing the window calls exit() from inside
      * lv_timer_handler(), so the thread is stopped from there rather than
      * after the loop, which is not reachable. */
-    ui_on_view_change(voice_listen);
     voice_start();
     atexit(voice_stop);
 

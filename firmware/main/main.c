@@ -36,7 +36,13 @@ static uint32_t tick_ms(void)
  * answer, and one the UI already draws. listening and speaking wait on the
  * audio path, the ES8311 codec and a wake-word engine, and stay dim until
  * there is something behind them. Each is one line here when it arrives; none
- * of it reaches into ui.c. */
+ * of it reaches into ui.c.
+ *
+ * The assistant's face waits on the same thing. With no button on either face
+ * and nothing on this board that can hear its name yet, ui_view_set() has no
+ * caller here and the watch stays a clock — one more line, beside these, once
+ * ESP-SR is listening. The simulator already does the whole of it; see
+ * host/voice.c. */
 static void status_tick(lv_timer_t * timer)
 {
     ui_status_t status = {

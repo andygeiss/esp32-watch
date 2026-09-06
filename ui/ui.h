@@ -29,23 +29,23 @@ typedef struct {
     bool speaking;    /**< the speaker is playing */
 } ui_status_t;
 
-/**
- * Told which view the button just switched to: true on the way to the
- * assistant, false on the way back to the clock.
- *
- * The other direction of the crossing ui_status_set() makes. The platform
- * hands the UI facts it cannot reach; this hands the platform the one thing
- * only the UI knows, which is that somebody pressed the button. ui.c calls it
- * and never learns what it does — the simulator opens a microphone, the
- * firmware will wake a codec, and neither appears here.
- */
-typedef void (*ui_view_cb_t)(bool assistant);
-
 /** Build the clock face on the active screen. Call once, after lv_init(). */
 void ui_build(void);
 
-/** Register the callback above. NULL, the default, is nothing to tell. */
-void ui_on_view_change(ui_view_cb_t cb);
+/**
+ * Show the assistant's face, or go back to the clock.
+ *
+ * There is no button on either face. Waking is a thing the watch is told
+ * about, not a thing it can decide: the platform hears its name and says so
+ * here, and ui.c never learns what did the hearing — the simulator runs a
+ * transcriber over everything the room says, the firmware will run a wake
+ * word on a codec. The same direction ui_status_set() crosses in, which is
+ * why nothing crosses the other way any more.
+ *
+ * Idempotent: being told the view it is already in is not a morph. Safe to
+ * call before ui_build(), and safe to call every frame.
+ */
+void ui_view_set(bool assistant);
 
 /** Hand the UI the current platform status. Safe to call before ui_build(). */
 void ui_status_set(const ui_status_t * status);

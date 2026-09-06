@@ -15,6 +15,7 @@ make flash      # onto the board, then its log
 +---------------------+       +---------------------+
 | wifi        62% [#] |       | wifi        62% [#] |
 |                     |       |                     |
+|                     |       |                     |
 |   ## ##     ## ##   |       |     .---.   .---.   |
 |   ## ##     ## ##   |  -->  |    (     ) (     )  |
 |   ## ##     ## ##   |       |     `---'   `---'   |
@@ -22,18 +23,23 @@ make flash      # onto the board, then its log
 |        09/06        |       |                     |
 |         SUN         |       |                     |
 |                     |       |                     |
-|     ( Hey Kai )     |       |      ( Quit )       |
 |                     |       |                     |
 | spk             mic |       | spk             mic |
 +---------------------+       +---------------------+
+        "Hey Kai"  ------------->
+        <-------------  "Tschüss", or 30 s of quiet
 ```
 
-Amber on black, the way a VFD readout looks. Tapping `Hey Kai` grows each digit
-group into an eye over 400 ms while the digits fade off the front of it; the
-eyes then blink, 140 ms every 3.6 s. `Quit` runs it backwards. Nothing moves in
-between — only size and opacity animate, which is why the hour and the minute
-have to stay two separate objects placed symmetrically about the centre. They
-are the two eyes.
+Amber on black, the way a VFD readout looks. Say `Hey Kai` and each digit group
+grows into an eye over 400 ms while the digits fade off the front of it; the
+eyes then blink, 140 ms every 3.6 s. A goodbye, or half a minute with nothing
+said, runs it backwards. Nothing moves in between — only size and opacity
+animate, which is why the hour and the minute have to stay two separate objects
+placed symmetrically about the centre. They are the two eyes.
+
+There is nothing to press on either face. The microphone is open from start-up
+and the transcriber is the wake word: the watch listens for its own name, and
+everything after it is a turn.
 
 ## Why two builds
 
@@ -61,11 +67,14 @@ The directory is the boundary. There is no `src/`, because one folder called
 beside its own checkout, so it cannot move into `ui/`.
 
 A fact the UI needs but cannot reach for itself — the charge, the radio, the
-microphone — crosses the other way through one struct and one setter,
-`ui_status_t` and `ui_status_set()`. The simulator fills it with a fake, the
-firmware fills it from the hardware, and `ui.c` never learns which. The
-button travels the other way, through `ui_on_view_change()`: one press morphs
-the digits into eyes and opens the microphone together.
+microphone — crosses through one struct and one setter, `ui_status_t` and
+`ui_status_set()`. The simulator fills it with a fake, the firmware fills it
+from the hardware, and `ui.c` never learns which.
+
+Nothing crosses the other way. Which face is up is another such fact, so it
+arrives the same direction through `ui_view_set()`: the simulator hears the
+watch's name in a transcript, the firmware will hear it on a codec, and `ui.c`
+is only ever told.
 
 Both sides hold the line up mechanically. On the host, `make check` compiles
 `ui/ui.c` alone and fails if `nm` finds anything undefined but `lv_*` and libc. In
@@ -100,7 +109,7 @@ speaks once `voices/kai.opus` and `voices/kai.txt` are in place — the
 synthesiser has no voice of its own and clones that clip; without them the
 watch runs and the two bottom corners stay dim. `make` on its
 own is `make check`: the `lv_conf.h` liveness grep, the build, the boundary
-check, and 80 assertions rendered into a byte array by `test_ui.c` — geometry,
+check, and 83 assertions rendered into a byte array by `test_ui.c` — geometry,
 opacity, label text and the pixels themselves, with no window and no
 screenshot. `make ci` runs the lot against the commit.
 

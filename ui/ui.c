@@ -2,11 +2,15 @@
  * @file ui.c
  * The watch face, the assistant face, and the morph between them.
  *
- * Clock view: hours left of centre, minutes right of it, the date and its
- * weekday below, and a button that hands over to the assistant. Assistant view: the two digit
- * groups have become the assistant's two eyes, and the button reads Quit.
- * Four corner readouts sit above both, fed by ui_status_set(): the radio and
- * the charge along the top, the assistant's speaker and microphone below.
+ * Clock view: hours left of centre, minutes right of it, and the date and
+ * its weekday below. Assistant view: the two digit groups have become the
+ * assistant's two eyes. Four corner readouts sit above both, fed by
+ * ui_status_set(): the radio and the charge along the top, the assistant's
+ * speaker and microphone below.
+ *
+ * Neither face has anything to press. The watch changes view when the
+ * platform hears its name and says so through ui_view_set(), so this file
+ * only ever receives — see ui.h.
  *
  * The hour and minute groups are separate objects placed symmetrically about
  * the centre, because that is what lets them become a pair of eyes. Keep them
@@ -51,22 +55,19 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 
 /* The layout rule: nothing comes closer than this to an edge of the panel. It
  * puts the digit groups 94 px either side of the centre, leaving 30 px
- * between them, and lifts the button 32 px off the bottom. */
+ * between them, and holds the four corner readouts off the glass. */
 #define UI_EDGE_MARGIN    32
 #define UI_GROUP_OFFSET_X (UI_PANEL_WIDTH / 2 - UI_EDGE_MARGIN - UI_GROUP_WIDTH / 2)
 
-#define UI_BUTTON_WIDTH  220
-#define UI_BUTTON_HEIGHT 64
-
 /* The time, then the date and its weekday as one block beneath it — a wider
  * gap above the pair than inside it, so they read as one thing. The whole
- * stack is centred in what the button leaves of the panel. */
+ * stack is centred in the panel: nothing along the bottom reserves a strip of
+ * it any more. */
 #define UI_STACK_GAP 24
 #define UI_DATE_GAP  8
 #define UI_STACK_HEIGHT (UI_GROUP_HEIGHT + UI_STACK_GAP + UI_DATE_HEIGHT \
                          + UI_DATE_GAP + UI_WEEKDAY_HEIGHT)
-#define UI_STACK_TOP ((UI_PANEL_HEIGHT - UI_EDGE_MARGIN - UI_BUTTON_HEIGHT \
-                       - UI_STACK_HEIGHT) / 2)
+#define UI_STACK_TOP ((UI_PANEL_HEIGHT - UI_STACK_HEIGHT) / 2)
 #define UI_TIME_OFFSET_Y (UI_STACK_TOP + UI_GROUP_HEIGHT / 2 - UI_PANEL_HEIGHT / 2)
 #define UI_DATE_OFFSET_Y (UI_STACK_TOP + UI_GROUP_HEIGHT + UI_STACK_GAP \
                           + UI_DATE_HEIGHT / 2 - UI_PANEL_HEIGHT / 2)
@@ -106,9 +107,7 @@ static lv_obj_t * speaker_label;
 static lv_obj_t * mic_label;
 static ui_status_t status = { .battery_pct = -1 };
 static lv_obj_t * eyes[2];
-static lv_obj_t * button_label;
 static ui_view_t  view;
-static ui_view_cb_t view_cb;
 
 /* One property of one object, per animation frame. */
 static void anim_opa(void * obj, int32_t value)
@@ -126,7 +125,7 @@ static void anim_height(void * obj, int32_t value)
     lv_obj_set_height(obj, value);
 }
 
-/* Every animation starts from where the property is now, so tapping again
+/* Every animation starts from where the property is now, so a change of view
  * mid-morph turns the movement around instead of jumping. lv_anim_start
  * replaces a running animation of the same object and property. */
 static void morph(lv_obj_t * obj, lv_anim_exec_xcb_t exec, int32_t from, int32_t to,
@@ -176,43 +175,6 @@ static void blink_when_open(lv_anim_t * resize)
     if (view == UI_VIEW_ASSISTANT) blink(resize->var);
 }
 
-/* The clock and the assistant are the same two objects at the same two
- * places: the digits fade off while the box behind them grows square and
- * round into an eye, and back again. */
-static void view_set(ui_view_t next)
-{
-    bool assistant = next == UI_VIEW_ASSISTANT;
-    int i;
-
-    view = next;
-
-    fade(hours_label,   assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
-    fade(minutes_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
-    fade(date_label,    assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
-    fade(weekday_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
-
-    for (i = 0; i < 2; i++) {
-        fade(eyes[i], assistant ? LV_OPA_COVER : LV_OPA_TRANSP);
-        morph(eyes[i], anim_width, lv_obj_get_width(eyes[i]),
-              assistant ? UI_EYE_SIZE : UI_GROUP_WIDTH, NULL);
-        morph(eyes[i], anim_height, lv_obj_get_height(eyes[i]),
-              assistant ? UI_EYE_SIZE : UI_GROUP_HEIGHT, blink_when_open);
-    }
-
-    lv_label_set_text(button_label, assistant ? "Quit" : "Hey Kai");
-
-    /* Last, so whatever the platform does about it happens against a view
-     * that has already been told to change. */
-    if (view_cb != NULL) view_cb(assistant);
-}
-
-static void button_clicked(lv_event_t * event)
-{
-    LV_UNUSED(event);
-
-    view_set(view == UI_VIEW_CLOCK ? UI_VIEW_ASSISTANT : UI_VIEW_CLOCK);
-}
-
 static lv_obj_t * digits_create(lv_obj_t * parent, int32_t offset_x)
 {
     lv_obj_t * label = lv_label_create(parent);
@@ -257,28 +219,6 @@ static lv_obj_t * eye_create(lv_obj_t * parent, int32_t offset_x)
     lv_obj_set_style_opa(eye, LV_OPA_TRANSP, LV_PART_MAIN);
 
     return eye;
-}
-
-static void button_create(lv_obj_t * parent)
-{
-    lv_obj_t * button = lv_button_create(parent);
-
-    lv_obj_remove_style_all(button); /* the theme's blue is not this face */
-    lv_obj_set_size(button, UI_BUTTON_WIDTH, UI_BUTTON_HEIGHT);
-    lv_obj_align(button, LV_ALIGN_BOTTOM_MID, 0, -UI_EDGE_MARGIN);
-    lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_border_width(button, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(button, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(button, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(button, LV_OPA_30, LV_PART_MAIN | LV_STATE_PRESSED);
-    lv_obj_add_event_cb(button, button_clicked, LV_EVENT_CLICKED, NULL);
-
-    button_label = lv_label_create(button);
-    lv_obj_set_style_text_font(button_label, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_set_style_text_color(button_label, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
-    lv_label_set_text(button_label, "Hey Kai");
-    lv_obj_center(button_label);
 }
 
 /* The corner a readout sits in decides which way its margin points. */
@@ -374,16 +314,41 @@ void ui_build(void)
                                   &ui_font_assistant_18, UI_SYMBOL_MIC);
     status_refresh();
 
-    button_create(screen);
     view = UI_VIEW_CLOCK;
 
     timer = lv_timer_create(clock_refresh, UI_REFRESH_PERIOD_MS, NULL);
     lv_timer_ready(timer); /* draw the real time now, not a second from now */
 }
 
-void ui_on_view_change(ui_view_cb_t cb)
+/* The clock and the assistant are the same two objects at the same two
+ * places: the digits fade off while the box behind them grows square and
+ * round into an eye, and back again.
+ *
+ * The platform polls whatever it heard into here, so most calls say nothing
+ * new and have to cost nothing — a morph restarted every frame would never
+ * finish, and would take the blink down with it. */
+void ui_view_set(bool assistant)
 {
-    view_cb = cb;
+    ui_view_t next = assistant ? UI_VIEW_ASSISTANT : UI_VIEW_CLOCK;
+    int i;
+
+    if (hours_label == NULL) return; /* told before the UI existed */
+    if (next == view) return;
+
+    view = next;
+
+    fade(hours_label,   assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
+    fade(minutes_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
+    fade(date_label,    assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
+    fade(weekday_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
+
+    for (i = 0; i < 2; i++) {
+        fade(eyes[i], assistant ? LV_OPA_COVER : LV_OPA_TRANSP);
+        morph(eyes[i], anim_width, lv_obj_get_width(eyes[i]),
+              assistant ? UI_EYE_SIZE : UI_GROUP_WIDTH, NULL);
+        morph(eyes[i], anim_height, lv_obj_get_height(eyes[i]),
+              assistant ? UI_EYE_SIZE : UI_GROUP_HEIGHT, blink_when_open);
+    }
 }
 
 void ui_status_set(const ui_status_t * next)

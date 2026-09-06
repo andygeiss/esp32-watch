@@ -21,9 +21,10 @@ building the watch face.
 
 **Done means.**
 
-- `make run` opens a 410 x 502 window showing the time, the date and a
-  `Hey Kai` button in amber on black, and that button morphs the digits into
-  the assistant's two eyes and back.
+- `make run` opens a 410 x 502 window showing the time and the date in amber
+  on black, and saying `Hey Kai` morphs the digits into the assistant's two
+  eyes; a goodbye or half a minute of quiet morphs them back. Neither face has
+  anything on it to press.
 - `CLAUDE.md` carries the pinned LVGL version, the `lv_conf.h` settings and
   their reasons, the build and run commands, the host/device boundary rule and
   the panel specification.
@@ -42,13 +43,15 @@ layout — turns the fast loop back into guesswork.
 - `make firmware` builds `firmware/` against the repo root's own `lvgl/` and
   `lv_conf.h`, with `ui/`'s four files compiled from where they sit.
 - The panel, the touch and the platform readouts reach the UI only through
-  `ui_build()` and `ui_status_set()`.
+  `ui_build()`, `ui_status_set()` and `ui_view_set()`, and nothing reaches back
+  out of it.
 - `make check` still passes on a machine with no ESP-IDF on it.
 
 # The voice loop
 
-**Job.** Hear a sentence, transcribe it, and say it back, so the microphone
-and speaker corners show something true.
+**Job.** Hear the watch's name, then hear a sentence, transcribe it and say it
+back, so the two views and the microphone and speaker corners all show
+something true.
 
 **Why.** The board has no codec wired up and no wake word, and the two
 readouts that stand for them were invented by a timer. A loop that runs on the
@@ -58,8 +61,10 @@ there breaks everywhere.
 
 **Done means.**
 
-- Pressing `Hey Kai` opens the microphone; a sentence spoken into it comes
-  back out of the speakers, and the two corners light while it does.
+- Saying `Hey Kai` wakes the assistant: the digits morph into eyes and the
+  next sentence comes back out of the speakers, with the two corners lit while
+  it does. Saying `tschüss`, or saying nothing for 30 s, goes back to the
+  clock.
 - `host/voice.c` uses nothing but SDL2 and the C standard library: no HTTP
   library, no JSON library.
 - `make check` still passes with no oMLX server running and no `voices/` in

@@ -5,9 +5,15 @@ than one way, the runners-up sit under _Avoid_. Wherever a concept shows up —
 in the code, in a constant, in a commit — it shows up under the word listed
 here.
 
-**Assistant view** — the face with the two eyes in it, and the `Quit` button.
-One of the two views; the other is the clock view. _Avoid: eye mode, face mode,
+**Assistant view** — the face with the two eyes in it. One of the two views;
+the other is the clock view. Nothing on it can be pressed: the watch arrives
+here on the wake phrase and leaves on the goodbye. _Avoid: eye mode, face mode,
 assistant mode._
+
+**Awake** — the state of having heard the wake phrase and not yet the goodbye.
+The voice loop's, not the UI's: `voice_awake()` is what the assistant view is
+up for, and `host/main.c` polls it into `ui_view_set()` ten times a second.
+_Avoid: active, listening, session._
 
 **Blink** — the infinite animation each eye runs while the assistant view is
 up: 70 ms shut, 70 ms open, then 3.6 s held open. It drives the same property
@@ -20,8 +26,9 @@ rewrites each digit to the widest digit's advance with its ink centred in that
 cell. Punctuation keeps its own advance and gets no cell. _Avoid: slot, box,
 advance width._
 
-**Clock view** — the face with the time, the date and its weekday on it, and
-the `Hey Kai` button. _Avoid: watch face, time mode, default view._
+**Clock view** — the face with the time, the date and its weekday on it. The
+stack sits in the middle of the whole panel; nothing along the bottom reserves
+a strip of it. _Avoid: watch face, time mode, default view._
 
 **Corner** — one of the four status readouts, one per corner of the panel: the
 radio and the charge along the top, the assistant's speaker and microphone
@@ -38,10 +45,9 @@ never hidden. An empty corner reads as a bug, a dim one reads as "no". It is
 _Avoid: grey out, disable, hide._
 
 **Edge margin** — the layout rule, and the constant `UI_EDGE_MARGIN`: nothing
-comes closer than 32 px to an edge of the panel. The 94 px group offset, the
-vertical centring of the time-and-date stack and the button's distance from the
-bottom are all derived from it, and it is what caps the digits at 118 px.
-_Avoid: padding, inset, safe area._
+comes closer than 32 px to an edge of the panel. The 94 px group offset and the
+four corner readouts are derived from it, and it is what caps the digits at
+118 px. _Avoid: padding, inset, safe area._
 
 **Eye** — one of the two amber circles the assistant looks out of. Each starts
 life as its digit group's own box — same size, same centre, already round,
@@ -53,6 +59,12 @@ speech, and the 800 ms below it that ends a turn. Measured, not chosen: a
 quiet room reads a mean RMS of 42, speech runs in the thousands, and
 `VOICE_SILENCE_RMS` sits at 500 between them. _Avoid: VAD, threshold, endpoint
 detection._
+
+**Goodbye** — a word that ends the session and hands the watch back to the
+clock: `tschüss`, `quit`, `stop`, matched against the whole transcript so that
+a sentence merely containing one is answered rather than obeyed. Its partner is
+the idle timeout, 30 s with nothing said, which needs no word at all. _Avoid:
+stop word, sleep phrase, dismiss._
 
 **Group** — the hour pair or the minute pair, as one object. There are two,
 placed symmetrically about the centre, and they stay separate because they are
@@ -89,10 +101,11 @@ recording the synthesiser borrows a voice from.
 without one, so it is a prerequisite rather than a setting. Gitignored: it is
 a recording of a person. _Avoid: sample, voice file, speaker prompt._
 
-**Status** — the struct `ui_status_t` and its setter, the one way a fact the UI
-cannot reach for itself gets in: the charge, the radio, the microphone, the
-speaker. The simulator fills it with a fake, the firmware fills it from the
-hardware, and `ui.c` never learns which. _Avoid: state, model, context._
+**Status** — the struct `ui_status_t` and its setter, how a fact the UI cannot
+reach for itself gets in: the charge, the radio, the microphone, the speaker.
+The simulator fills it with a fake, the firmware fills it from the hardware,
+and `ui.c` never learns which. `ui_view_set()` is the same crossing for which
+face is up, and nothing crosses the other way. _Avoid: state, model, context._
 
 **Strip** — one flush's worth of pixels: a horizontal slice of a dirty area, as
 many rows tall as the 41 kB draw buffer holds, rendered and then sent over DMA.
@@ -105,10 +118,11 @@ not shift sideways when the time changes. Montserrat's figures are proportional
 impossible to miss. `--no-kerning` belongs to the same decision. _Avoid:
 monospace digits, fixed-width numerals._
 
-**Turn** — one exchange: the microphone opens, a sentence arrives, it is
-transcribed, answered and played back. The voice loop takes turns for as long
-as the assistant is awake, and `Quit` ends the one in progress. _Avoid:
-exchange, round, interaction._
+**Turn** — one exchange: a sentence arrives, is transcribed, answered and
+played back. The voice loop takes turns for as long as the assistant is awake.
+Nothing interrupts one in progress — talking over the assistant needs the echo
+cancellation this half-duplex loop has none of. _Avoid: exchange, round,
+interaction._
 
 **View** — the clock view or the assistant view. There is one screen and two
 views on it, and the morph is how it gets from one to the other. _Avoid:
@@ -118,3 +132,10 @@ screen, page, mode._
 speaker, on a thread of its own. Host-only, and the reason the bottom two
 corners are no longer faked. _Avoid: audio pipeline, speech stack, assistant
 backend._
+
+**Wake phrase** — `Hey Kai`, and the thing that puts the assistant view up.
+There is no wake-word engine on a Mac, so the microphone stays open, every
+utterance is transcribed, and the phrase is looked for in the text — `WAKE` is
+a table because the transcriber has never been shown the name and spells it
+several ways. Whatever follows it is the first turn. _Avoid: wake word, hotword,
+trigger._

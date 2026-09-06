@@ -12,12 +12,20 @@
  * speaker is exactly what the transcriber heard. A language model belongs
  * behind the same seam later — reply() is the only function that would change.
  *
+ * There is nothing to press. The watch wakes when its own name turns up in a
+ * transcript and goes back to the clock on a goodbye or a stretch of silence,
+ * so the microphone is open from start-up and every utterance in the room is
+ * transcribed. That is the one part of this the device will not copy: an
+ * ESP32-S3 runs ESP-SR locally and opens a connection only once it has heard
+ * its name.
+ *
  * Three things are worth knowing before touching it:
  *
  * - **Everything here runs on its own thread.** A turn costs seconds and
  *   LVGL is single-threaded, so the loop cannot run in lv_timer_handler().
- *   It publishes two booleans through SDL atomics; main.c reads them in its
- *   status timer and hands them to ui_status_set(). Nothing else crosses.
+ *   It publishes three booleans through SDL atomics; main.c reads them in its
+ *   timers and hands two to ui_status_set() and one to ui_view_set(). Nothing
+ *   else crosses.
  *
  * - **No libraries beyond SDL2.** SPEC.md allows LVGL and SDL2 and nothing
  *   else, so the HTTP client below is a socket, a request written by hand and
@@ -35,6 +43,7 @@
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <netdb.h>
 #include <stdarg.h>
@@ -74,6 +83,15 @@
 #define VOICE_SILENCE_MS    800
 #define VOICE_MIN_SPEECH_MS 300
 #define VOICE_MAX_TURN_MS   20000
+
+/* How long the assistant waits to be spoken to before going back to the
+ * clock. With nothing to press, this is the way out that needs nothing said
+ * at all — long enough to think about what to ask, short enough that a watch
+ * left face-up does not sit there staring. record() takes it as a deadline
+ * on the silence before the first word; VOICE_WAIT_FOREVER is the other
+ * case, asleep, where there is nothing to time out of. */
+#define VOICE_IDLE_MS       30000
+#define VOICE_WAIT_FOREVER  0
 
 /* Transcription answers in about a second and synthesis takes roughly as long
  * as the speech it produces, so the budget is the ceiling for a stalled server
@@ -275,8 +293,8 @@ static bool json_string(const char * json, const char * key, char * out, size_t 
 
 /* The loop's state, up here because a request in flight has to be able to see
  * that the window was closed. */
-static SDL_atomic_t awake;     /* the button: the assistant is up */
-static SDL_atomic_t listening; /* published to the UI thread */
+static SDL_atomic_t awake;     /* the name has been heard, the goodbye has not */
+static SDL_atomic_t recording; /* the microphone is dequeuing */
 static SDL_atomic_t speaking;
 static SDL_atomic_t running;
 
@@ -595,8 +613,7 @@ static SDL_AudioDeviceID speaker;
 static SDL_AudioSpec     speaker_spec;
 
 static SDL_Thread * worker;
-static int16_t *    pcm;   /* one turn's recording */
-static bool         ready; /* a clip, a microphone and a speaker are all there */
+static int16_t *    pcm; /* one turn's recording */
 
 /* Loudness of one block, which is the whole of the endpoint detection: speech
  * is orders of magnitude above a quiet room, so nothing subtler is needed to
@@ -611,25 +628,39 @@ static int block_rms(const int16_t * block, size_t samples)
     return (int) SDL_sqrt(sum / (double) samples);
 }
 
-/* Records until the speaker stops, and returns how many samples that was.
- * Zero means the turn was abandoned: the button was pressed, or nothing but
- * room noise arrived. */
-static size_t record(void)
+/* Records one utterance and returns how many samples it was.
+ *
+ * `patience_ms` is how long it will wait for the first word before giving up;
+ * VOICE_WAIT_FOREVER waits, which is what the loop asks for while the
+ * assistant is asleep and there is nothing to time out of. Once somebody is
+ * talking the gate takes over and the wait no longer applies.
+ *
+ * Zero back means nothing worth sending: the patience ran out, what arrived
+ * was too short to be a word, or the loop is shutting down. */
+static size_t record(uint32_t patience_ms)
 {
     size_t samples = 0;
     uint32_t quiet_ms = 0;
+    uint32_t waited_ms = 0;
     bool heard = false;
 
     SDL_ClearQueuedAudio(microphone); /* whatever accumulated while idle */
     SDL_PauseAudioDevice(microphone, 0);
-    SDL_AtomicSet(&listening, 1);
+    SDL_AtomicSet(&recording, 1);
 
-    while (SDL_AtomicGet(&awake) && SDL_AtomicGet(&running)) {
+    while (SDL_AtomicGet(&running)) {
         uint32_t got;
         size_t block;
         int rms;
 
         SDL_Delay(VOICE_BLOCK_MS);
+
+        /* Wall time rather than samples, so a device that has stopped
+         * delivering still hands the deadline back. */
+        if (!heard && patience_ms != VOICE_WAIT_FOREVER) {
+            waited_ms += VOICE_BLOCK_MS;
+            if (waited_ms >= patience_ms) break;
+        }
 
         got = SDL_DequeueAudio(microphone, pcm + samples,
                                (uint32_t) ((VOICE_MAX_SAMPLES - samples) * sizeof(int16_t)));
@@ -657,7 +688,7 @@ static size_t record(void)
     }
 
     SDL_PauseAudioDevice(microphone, 1);
-    SDL_AtomicSet(&listening, 0);
+    SDL_AtomicSet(&recording, 0);
 
     if (!heard) return 0;
     if (samples * 1000 / VOICE_RATE < VOICE_MIN_SPEECH_MS) return 0; /* a cough */
@@ -665,8 +696,13 @@ static size_t record(void)
 }
 
 /* Plays a WAV, opening the speaker to match it. Returns when the last sample
- * has gone out, or at once when the assistant is sent away mid-sentence —
- * which is what makes Quit interrupt a reply. */
+ * has gone out, or at once when the window is closed.
+ *
+ * Nothing else cuts a reply short. Talking over the assistant means being
+ * heard while it is speaking, which needs the acoustic echo cancellation this
+ * half-duplex loop has none of — the same reason the microphone and speaker
+ * corners are two flags rather than one mode. ESP-SR gives the S3 that, and
+ * the interrupt comes back with it. */
 static void play(const unsigned char * file, size_t len)
 {
     size_t fmt_len, data_len;
@@ -702,10 +738,6 @@ static void play(const unsigned char * file, size_t len)
     if (SDL_QueueAudio(speaker, data, (Uint32) data_len) == 0) {
         SDL_PauseAudioDevice(speaker, 0);
         while (SDL_GetQueuedAudioSize(speaker) > 0 && SDL_AtomicGet(&running)) {
-            if (!SDL_AtomicGet(&awake)) { /* Quit, mid-sentence */
-                SDL_ClearQueuedAudio(speaker);
-                break;
-            }
             SDL_Delay(VOICE_BLOCK_MS);
         }
     }
@@ -724,6 +756,103 @@ static const char * reply(const char * heard)
     return heard;
 }
 
+/* ------------------------------------------------------------------ */
+/* The name, and the goodbye. There is nothing to press, so both of them are  */
+/* words, and words arrive here only as a transcript: the transcriber is this */
+/* host's wake-word engine because a Mac has no other one.                    */
+/* ------------------------------------------------------------------ */
+
+/* KAI is a name the transcriber has never been shown, so it writes down
+ * whichever German word sounded closest, and not the same one every time.
+ * More than one spelling is the point of the table; add to it from what turns
+ * up in the log rather than guessing at the phonetics.
+ *
+ * It is the greeting that is matched, not the name on its own: Kaiser,
+ * Kaimauer and a good many other ordinary German words start the same way,
+ * and a watch that wakes up on the news is worse than one that misses a call.
+ */
+static const char * const WAKE[] = {
+    "hey kai", "hey kay", "hey ky", "hey chai", "hei kai", "hi kai",
+};
+
+/* Said on its own, this ends the session. Whole transcripts rather than
+ * substrings: "stopp mal die Musik" is something to answer, not an
+ * instruction to go away. tschüss/tschüs and stop/stopp are one word each:
+ * the transcriber picks a spelling and there is no telling which. */
+static const char * const GOODBYE[] = {
+    "tschüss", "tschüs", "quit", "stop", "stopp",
+};
+
+#define VOICE_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+/* Lower-cases byte for byte, so every offset into the copy is an offset into
+ * the original. Only ASCII moves: the ü of tschüss is two bytes above 127 and
+ * comes through untouched, which is what the table above is written for. */
+static void lower(const char * in, char * out, size_t cap)
+{
+    size_t i;
+
+    for (i = 0; i + 1 < cap && in[i] != '\0'; i++) {
+        out[i] = (char) tolower((unsigned char) in[i]);
+    }
+    out[i] = '\0';
+}
+
+/* What was said after the watch's name, or NULL if its name is not in there.
+ * An empty string means the name and nothing else. */
+static const char * after_wake(const char * heard)
+{
+    char lowered[VOICE_MAX_TEXT];
+    const char * rest = NULL;
+    size_t i;
+
+    lower(heard, lowered, sizeof(lowered));
+
+    for (i = 0; i < VOICE_COUNT(WAKE); i++) {
+        const char * at = strstr(lowered, WAKE[i]);
+        if (at == NULL) continue;
+        at += strlen(WAKE[i]);
+        if (rest == NULL || at < rest) rest = at;
+    }
+    if (rest == NULL) return NULL;
+
+    rest = heard + (rest - lowered); /* lower() kept the offsets */
+    while (*rest == ' ' || *rest == ',' || *rest == '.' ||
+           *rest == '!' || *rest == '?') {
+        rest++;
+    }
+    return rest;
+}
+
+/* True when the whole transcript is one of the goodbyes, give or take the
+ * case and whatever punctuation the transcriber put on the end. */
+static bool is_goodbye(const char * heard)
+{
+    char lowered[VOICE_MAX_TEXT];
+    const char * word = lowered;
+    size_t len, i;
+
+    lower(heard, lowered, sizeof(lowered));
+
+    while (*word == ' ') word++;
+    for (len = strlen(word); len > 0; len--) {
+        char c = word[len - 1];
+        if (c != ' ' && c != ',' && c != '.' && c != '!' && c != '?') break;
+    }
+
+    for (i = 0; i < VOICE_COUNT(GOODBYE); i++) {
+        if (strlen(GOODBYE[i]) == len && strncmp(word, GOODBYE[i], len) == 0) return true;
+    }
+    return false;
+}
+
+/* One pass is one utterance. Asleep, the only thing that matters about it is
+ * whether the watch's name is in there; awake, all of it is something to
+ * answer, except the goodbye.
+ *
+ * The microphone never closes, so every sentence spoken in the room goes to
+ * the transcriber — which is the price of having no wake-word engine on this
+ * host, and the one part of this loop the device will not copy. */
 static int loop(void * unused)
 {
     (void) unused;
@@ -731,23 +860,45 @@ static int loop(void * unused)
     while (SDL_AtomicGet(&running)) {
         char heard[VOICE_MAX_TEXT];
         buf_t wav = { 0 };
+        const char * say;
         size_t samples;
 
-        if (!SDL_AtomicGet(&awake)) {
-            SDL_Delay(50);
+        /* Awake, a stretch with nothing said is the end of the session: with
+         * nothing to press, there has to be a way back to the clock that
+         * needs nothing said at all. Asleep, there is nothing to leave. */
+        samples = record(SDL_AtomicGet(&awake) ? VOICE_IDLE_MS : VOICE_WAIT_FOREVER);
+        if (samples == 0) {
+            if (SDL_AtomicGet(&awake) && SDL_AtomicGet(&running)) {
+                SDL_Log("voice: nothing said for %d s — back to the clock",
+                        VOICE_IDLE_MS / 1000);
+                SDL_AtomicSet(&awake, 0);
+            }
             continue;
         }
 
-        samples = record();
-        if (samples == 0) continue;
-
         if (!transcribe(pcm, samples, heard, sizeof(heard))) continue;
         if (heard[0] == '\0') continue; /* the transcriber heard no words */
-        SDL_Log("voice: heard \"%s\"", heard);
 
-        if (!SDL_AtomicGet(&awake)) continue;
+        say = heard;
 
-        if (synthesise(reply(heard), &wav)) {
+        if (!SDL_AtomicGet(&awake)) {
+            const char * rest = after_wake(heard);
+            if (rest == NULL) continue; /* the room talking, not the watch */
+            SDL_Log("voice: woken by \"%s\"", heard);
+            SDL_AtomicSet(&awake, 1);
+            if (*rest == '\0') continue; /* its name and nothing after it */
+            say = rest; /* "Hey Kai, hallo" is a turn whose answer is "hallo" */
+        }
+        else if (is_goodbye(heard)) {
+            SDL_Log("voice: \"%s\" — back to the clock", heard);
+            SDL_AtomicSet(&awake, 0);
+            continue;
+        }
+        else {
+            SDL_Log("voice: heard \"%s\"", heard);
+        }
+
+        if (synthesise(reply(say), &wav)) {
             play((const unsigned char *) wav.data, wav.len);
         }
         buf_free(&wav);
@@ -863,8 +1014,7 @@ void voice_start(void)
         SDL_AtomicSet(&running, 0);
         return;
     }
-    ready = true;
-    SDL_Log("voice: listening through %s, speaking as %s",
+    SDL_Log("voice: waiting to be called, hearing through %s and speaking as %s",
             VOICE_STT_MODEL, VOICE_TTS_MODEL);
 }
 
@@ -884,18 +1034,19 @@ void voice_stop(void)
     free(ref_text);
     pcm = NULL;
     ref_audio = ref_text = NULL;
-    ready = false;
 }
 
-void voice_listen(bool on)
+bool voice_awake(void)
 {
-    if (!ready) return;
-    SDL_AtomicSet(&awake, on ? 1 : 0);
+    return SDL_AtomicGet(&awake) != 0;
 }
 
+/* Awake as well as recording. The microphone is open the whole time the loop
+ * runs, but a corner that is always lit says nothing — this one means the
+ * next thing said is meant for the assistant. */
 bool voice_listening(void)
 {
-    return SDL_AtomicGet(&listening) != 0;
+    return SDL_AtomicGet(&recording) != 0 && SDL_AtomicGet(&awake) != 0;
 }
 
 bool voice_speaking(void)

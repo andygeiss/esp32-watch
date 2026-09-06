@@ -2,11 +2,12 @@
  * @file test_ui.c
  * Renders ui.c into a plain buffer and checks what came out.
  *
- * The second host. main.c drives the UI with an SDL window and a real clock;
- * this one drives it with a byte array and a fake clock, so the layout, the
- * views, the morph, the blink and the status readouts can all be checked
- * without a screen — `screencapture` needs permissions this machine does not
- * grant, and a person looking at a window is not a gate.
+ * The second host. main.c drives the UI with an SDL window, a real clock and
+ * a microphone; this one drives it with a byte array, a fake clock and
+ * ui_view_set() called by hand, so the layout, the views, the morph, the
+ * blink and the status readouts can all be checked without a screen —
+ * `screencapture` needs permissions this machine does not grant, and a person
+ * looking at a window is not a gate.
  *
  * Host-only, like main.c: the firmware builds neither. `make test` runs it,
  * and a non-zero exit is a failure.
@@ -31,10 +32,12 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 #define GROUP_HEIGHT 85
 #define EYE_SIZE     120
 
-/* Children of the screen, in the order ui_build() creates them. */
+/* Children of the screen, in the order ui_build() creates them. Neither face
+ * has a button on it: the platform hears the watch's name and says so through
+ * ui_view_set(), so there is nothing here to click. */
 enum {
     EYE_LEFT, EYE_RIGHT, HOURS, MINUTES, DATE, WEEKDAY,
-    WIFI, BATTERY, SPEAKER, MIC, BUTTON,
+    WIFI, BATTERY, SPEAKER, MIC,
     CHILD_COUNT
 };
 
@@ -112,30 +115,6 @@ static const char * text_of(lv_obj_t * obj)
     return lv_label_get_text(obj);
 }
 
-static void click_button(void)
-{
-    lv_obj_send_event(child(BUTTON), LV_EVENT_CLICKED, NULL);
-}
-
-/* What ui_on_view_change() reported. The button is the only way the platform
- * learns the assistant was asked for — the simulator opens a microphone on
- * it — so a miscount or a flipped sense is a loop that listens on the clock
- * face or goes deaf on the assistant's. */
-static int  view_changes;
-static bool told_assistant;
-
-static void on_view_change(bool assistant)
-{
-    view_changes++;
-    told_assistant = assistant;
-}
-
-/* The label inside the button, which is the only thing that names the view. */
-static const char * button_text(void)
-{
-    return lv_label_get_text(lv_obj_get_child(child(BUTTON), 0));
-}
-
 static void expect_clock_view(const char * when)
 {
     CHECK(opa_of(child(HOURS)) == LV_OPA_COVER, "%s: hours faded (%d)", when, opa_of(child(HOURS)));
@@ -148,7 +127,6 @@ static void expect_clock_view(const char * when)
           lv_obj_get_height(child(EYE_LEFT)) == GROUP_HEIGHT,
           "%s: left eye is %dx%d, not the digit group's box", when,
           lv_obj_get_width(child(EYE_LEFT)), lv_obj_get_height(child(EYE_LEFT)));
-    CHECK(strcmp(button_text(), "Hey Kai") == 0, "%s: button reads \"%s\"", when, button_text());
 }
 
 static void expect_assistant_view(const char * when)
@@ -163,12 +141,16 @@ static void expect_assistant_view(const char * when)
           lv_obj_get_height(child(EYE_LEFT)) == EYE_SIZE,
           "%s: left eye is %dx%d, not %d square", when,
           lv_obj_get_width(child(EYE_LEFT)), lv_obj_get_height(child(EYE_LEFT)), EYE_SIZE);
-    CHECK(strcmp(button_text(), "Quit") == 0, "%s: button reads \"%s\"", when, button_text());
 }
 
 /* Shortest the left eye gets over a stretch of time, and how often it got
- * there: a blink is the height pulling in to a line and back out. */
-static int32_t watch_blinks(uint32_t ms, int * blinks)
+ * there: a blink is the height pulling in to a line and back out.
+ *
+ * `saying` is a view to re-assert before every frame, or NULL for none. It is
+ * how the poll main.c runs is reproduced here: ten times a second it hands
+ * ui_view_set() the view the watch is already in, and if that restarts the
+ * morph the eye never blinks again. */
+static int32_t watch_blinks(uint32_t ms, int * blinks, const bool * saying)
 {
     lv_obj_t * eye = child(EYE_LEFT);
     int32_t shortest = INT32_MAX;
@@ -178,6 +160,7 @@ static int32_t watch_blinks(uint32_t ms, int * blinks)
     *blinks = 0;
     for (t = 0; t < ms; t += 16) {
         int32_t height;
+        if (saying != NULL) ui_view_set(*saying);
         fake_tick += 16;
         lv_timer_handler();
         height = lv_obj_get_height(eye);
@@ -194,7 +177,6 @@ static void check_structure(void)
     CHECK(lv_obj_get_child_count(lv_screen_active()) == CHILD_COUNT,
           "screen holds %u children, not %d — has ui_build's order changed?",
           lv_obj_get_child_count(lv_screen_active()), CHILD_COUNT);
-    CHECK(lv_obj_check_type(child(BUTTON), &lv_button_class), "last child is not the button");
     CHECK(lv_obj_check_type(child(HOURS), &lv_label_class), "hours is not a label");
     CHECK(lv_obj_check_type(child(EYE_LEFT), &lv_obj_class), "left eye is not a plain object");
     CHECK(!lv_obj_has_flag(child(EYE_LEFT), LV_OBJ_FLAG_CLICKABLE),
@@ -231,13 +213,17 @@ static void check_layout(void)
     CHECK(lv_obj_get_height(child(WEEKDAY)) < lv_obj_get_height(child(DATE)),
           "the weekday (%d px) is not smaller than the date (%d px)",
           lv_obj_get_height(child(WEEKDAY)), lv_obj_get_height(child(DATE)));
-    CHECK(bottom_of(child(WEEKDAY)) < lv_obj_get_y(child(BUTTON)),
-          "the weekday runs into the button");
-    CHECK(PANEL_HEIGHT - 1 - bottom_of(child(BUTTON)) == EDGE_MARGIN,
-          "the button sits %d off the bottom, not %d",
-          PANEL_HEIGHT - 1 - bottom_of(child(BUTTON)), EDGE_MARGIN);
-    CHECK(centred(child(BUTTON)), "the button is not centred: %d px left, %d px right",
-          lv_obj_get_x(child(BUTTON)), PANEL_WIDTH - 1 - right_of(child(BUTTON)));
+
+    /* Nothing reserves the bottom of the panel any more, so the stack sits in
+     * the middle of the whole of it: as much sky above the time as floor
+     * below the weekday, give or take the pixel an odd height cannot split. */
+    {
+        int32_t above = lv_obj_get_y(child(HOURS));
+        int32_t below = PANEL_HEIGHT - 1 - bottom_of(child(WEEKDAY));
+        CHECK(above - below <= 1 && below - above <= 1,
+              "the stack is not centred in the panel: %d px above, %d px below",
+              above, below);
+    }
 
     CHECK(lv_obj_get_x(child(WIFI)) == EDGE_MARGIN &&
           lv_obj_get_y(child(WIFI)) == EDGE_MARGIN, "wifi is not in the top-left corner");
@@ -249,10 +235,10 @@ static void check_layout(void)
     CHECK(PANEL_WIDTH - 1 - right_of(child(MIC)) == EDGE_MARGIN &&
           PANEL_HEIGHT - 1 - bottom_of(child(MIC)) == EDGE_MARGIN,
           "the microphone is not in the bottom-right corner");
-    CHECK(right_of(child(SPEAKER)) < lv_obj_get_x(child(BUTTON)),
-          "the speaker runs into the button");
-    CHECK(lv_obj_get_x(child(MIC)) > right_of(child(BUTTON)),
-          "the microphone runs into the button");
+    CHECK(right_of(child(SPEAKER)) < lv_obj_get_x(child(MIC)),
+          "the two bottom corners overlap");
+    CHECK(bottom_of(child(WEEKDAY)) < lv_obj_get_y(child(SPEAKER)),
+          "the weekday runs into the bottom corners");
 }
 
 static void check_readouts(void)
@@ -356,11 +342,13 @@ int main(void)
     lv_display_set_buffers(display, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(display, flush_cb);
 
-    ui_on_view_change(on_view_change);
+    /* Before anything exists, which the firmware could do the moment a wake
+     * word beats ui_build() to it. A call through the labels here takes the
+     * whole run down with a segfault rather than printing a failure. */
+    ui_view_set(true);
+
     ui_build();
     pump(32);
-    CHECK(view_changes == 0, "ui_build() reported %d view changes; arriving on the clock is not one",
-          view_changes);
 
     check_structure();
     check_layout();
@@ -372,7 +360,9 @@ int main(void)
     eye_centre_x = lv_obj_get_x(child(EYE_LEFT)) + lv_obj_get_width(child(EYE_LEFT)) / 2;
     eye_centre_y = lv_obj_get_y(child(EYE_LEFT)) + lv_obj_get_height(child(EYE_LEFT)) / 2;
 
-    click_button();
+    expect_clock_view("after being woken before ui_build()");
+
+    ui_view_set(true);
     pump(600);
     expect_assistant_view("after the morph");
     CHECK(lv_obj_get_x(child(EYE_LEFT)) + lv_obj_get_width(child(EYE_LEFT)) / 2 == eye_centre_x &&
@@ -381,33 +371,33 @@ int main(void)
     CHECK(opa_of(child(WIFI)) == LV_OPA_COVER && opa_of(child(BATTERY)) == LV_OPA_COVER &&
           opa_of(child(SPEAKER)) == LV_OPA_COVER && opa_of(child(MIC)) == LV_OPA_COVER,
           "a corner readout left with the clock; all four sit over both views");
-    CHECK(view_changes == 1, "one press reported %d changes", view_changes);
-    CHECK(told_assistant, "the press to the assistant reported the clock");
 
     printf("blink\n");
-    shortest = watch_blinks(9000, &blinks);
+    shortest = watch_blinks(9000, &blinks, NULL);
     CHECK(blinks >= 2, "%d blinks in 9 s", blinks);
     CHECK(shortest < 20, "the eye only closed to %d px", shortest);
     CHECK(lv_obj_get_height(child(EYE_LEFT)) == EYE_SIZE,
           "the eye did not open back to %d px", EYE_SIZE);
 
-    click_button();
+    /* The same stretch again, with the view re-asserted on every frame the
+     * way main.c's timer does. Being told the view it is already in has to
+     * cost nothing: a morph restarted ten times a second never arrives, and
+     * takes the blink down with it because both drive the eye's height. */
+    {
+        bool assistant = true;
+        watch_blinks(9000, &blinks, &assistant);
+        CHECK(blinks >= 2, "%d blinks in 9 s while the view was re-asserted every frame",
+              blinks);
+        expect_assistant_view("while the view was re-asserted every frame");
+    }
+
+    ui_view_set(false);
     pump(600);
     expect_clock_view("back on the clock");
-    CHECK(view_changes == 2, "two presses reported %d changes", view_changes);
-    CHECK(!told_assistant, "the press back to the clock reported the assistant");
 
-    shortest = watch_blinks(9000, &blinks);
+    shortest = watch_blinks(9000, &blinks, NULL);
     CHECK(blinks == 0, "the eye blinked %d times on the clock face", blinks);
     CHECK(shortest == GROUP_HEIGHT, "the eye box changed height on the clock face");
-
-    /* NULL is the default and has to stay harmless: the firmware has nothing
-     * to hand this yet, and a call through it would take the watch down. */
-    ui_on_view_change(NULL);
-    click_button();
-    pump(600);
-    CHECK(view_changes == 2, "the button reported %d changes after the callback was cleared",
-          view_changes);
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures != 0;

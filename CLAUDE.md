@@ -56,7 +56,7 @@ ESP-IDF itself lives outside the tree:
 
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with eight changes. It sits
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with seven changes. It sits
 at the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that
 root on the include path — in the host build because `CMakeLists.txt` sets both
 before `add_subdirectory(lvgl)`, in the firmware because LVGL's own
@@ -74,14 +74,13 @@ defines and nothing else does. A second `lv_conf.h` would be a second layout.
 | 47 | `LV_USE_STDLIB_MALLOC` under `ESP_PLATFORM` | `LV_STDLIB_CLIB` on the device, `LV_STDLIB_BUILTIN` on the host. The built-in allocator's pool is a static array, and the 512 KB below is the whole of the ESP32-S3's internal SRAM. On the device LVGL allocates through the C library, which `CONFIG_SPIRAM_USE_MALLOC` points at the 8 MB of PSRAM. |
 | 80 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. Host only — the line above takes the device off this allocator. |
 | 619 | `LV_FONT_MONTSERRAT_18 1` | The corner readouts, and the WiFi and battery symbols, which LVGL compiles into its built-in fonts. |
-| 626 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
-| 630 | `LV_FONT_MONTSERRAT_40 1` | The weekday under the date. It is letters, which none of the generated fonts here hold. |
+| 630 | `LV_FONT_MONTSERRAT_40 1` | The weekday under the date. It is letters, which none of the generated fonts here hold, and built-in fonts are off by default. `_32` was on beside it for the button label, and went out with the button. |
 | 1222 | `LV_USE_SDL` under `ESP_PLATFORM` | `1` on the host, which compiles LVGL's own SDL display and input backend — the host half of the simulator. `0` on the device, where there is no SDL and those sources would not compile. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#(define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_USE_STDLIB_MALLOC|LV_FONT_MONTSERRAT_(18|32|40)|LV_USE_SDL)\b|ifdef ESP_PLATFORM)' lv_conf.h
+    grep -n -E '^\s*#(define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_USE_STDLIB_MALLOC|LV_FONT_MONTSERRAT_(18|40)|LV_USE_SDL)\b|ifdef ESP_PLATFORM)' lv_conf.h
 
 ## The host / device boundary
 
@@ -118,13 +117,17 @@ microphone — crosses in the other direction, through a struct and a setter in
 firmware fills it from the hardware, and `ui.c` never learns which. That is the
 pattern for the next one too.
 
-The one fact that travels the other way is the button, through
-`ui_on_view_change()`: the platform cannot see a press, and waking an
-assistant is not something `ui.c` can do for itself. It is a single function
-pointer, `NULL` by default, and `ui.c` never learns what it does — the
-simulator opens a microphone on it, the firmware will wake a codec. Keep that
-seam this narrow. A second callback is a sign the UI is being asked to drive
-the platform rather than report to it.
+**Nothing travels the other way.** There is no button on either face, so
+there is no press for `ui.c` to report. Which face is up is a fact about the
+platform, like the charge and the radio, and it arrives in the same direction:
+`ui_view_set(bool assistant)`. The simulator hears the watch's name in a
+transcript, the firmware will hear it on a codec, and `ui.c` never learns
+which. It is idempotent because the platform polls it — `host/main.c` hands it
+an answer ten times a second, and only the answer that changed is a morph.
+
+Keep it one-directional. A callback out of `ui.c` is a sign the UI is being
+asked to drive the platform rather than be told by it, and the button was the
+only thing that ever wanted one.
 
 Two checks settle it, one on each side. The host's is the symbol list — compile
 the portable side alone and look at what it leaves undefined. Anything but
@@ -233,9 +236,9 @@ above.
 defaults to `y`, which makes LVGL ignore `lv_conf.h` entirely and take its
 settings from menuconfig — the firmware's version of the `#if 0` trap at the
 top of that file, and just as quiet. `sdkconfig.defaults` sets it to `n`. If it
-ever goes back, LVGL's Kconfig defaults leave `LV_FONT_MONTSERRAT_32` and `_40`
-off, `ui.c` names both, and the build fails at the link instead of booting to a
-face with no letters on it.
+ever goes back, LVGL's Kconfig defaults leave `LV_FONT_MONTSERRAT_40` off,
+`ui.c` names it for the weekday, and the build fails at the link instead of
+booting to a face with a blank line under the date.
 
 ### The panel
 
@@ -296,6 +299,11 @@ The same `ui_status_t` the simulator fakes, filled from what is actually there:
 Each is one line in `status_tick()` when it arrives, and none of it reaches
 into `ui.c`. That is the point of the struct.
 
+**The assistant's face waits on the same thing.** With no button on either
+face and nothing on this board that can yet hear its name, `ui_view_set()` has
+no caller in the firmware and the watch stays a clock. It is one more line
+beside those, once ESP-SR is listening.
+
 ### The clock
 
 The board has no RTC, so `time(NULL)` counts from reset until something tells
@@ -344,8 +352,9 @@ both `CMakeLists.txt` files, and in `ui.c` the font name and the cell and
 line-height constants the layout is derived from. The generated files land in
 `ui/`, beside the code that names them.
 
-The button is the exception: its label is letters, so it uses LVGL's built-in
-`lv_font_montserrat_32`.
+The weekday is the exception: it is letters, so it uses LVGL's built-in
+`lv_font_montserrat_40`, and the corner readouts use `_18` because LVGL
+compiles the WiFi and battery symbols into it.
 
 ## Current UI
 
@@ -353,14 +362,15 @@ The button is the exception: its label is letters, so it uses LVGL's built-in
 
 **Clock.** Black background, amber `0xFFB000` throughout: the hour group 94 px
 left of centre, the minute group 94 px right of it, then `MM/DD` and its
-weekday centred below them, and a `Hey Kai` button 32 px off the bottom. One
-1 Hz `lv_timer` refreshes all four labels.
+weekday centred below them. One 1 Hz `lv_timer` refreshes all four labels.
 
 The stack steps down in size — 118 px for the time, 72 px for the date, 40 px
 for the weekday — and the gap above the date-and-weekday pair (24 px) is wider
 than the one inside it (8 px), so the two read as one block under the time
 rather than as three separate lines. Every offset in it is derived from those
-heights and `UI_EDGE_MARGIN`; none is typed in by hand.
+heights and `UI_EDGE_MARGIN`; none is typed in by hand. The block sits in the
+middle of the whole panel: there is no button along the bottom reserving a
+strip of it any more, and `UI_STACK_TOP` says exactly that.
 
 **Corners.** The hardware along the top: `LV_SYMBOL_WIFI` top-left and the
 charge as `62% ` top-right, both in LVGL's built-in Montserrat 18, whose
@@ -383,8 +393,16 @@ none of it stops mattering while the assistant is listening. The values arrive
 through `ui_status_set()` — see the host/device boundary above.
 
 **Assistant.** The same two groups, now the assistant's two eyes: 120 px amber
-circles in the same places, with the digits and the date faded out. The button
-reads `Quit` and switches back.
+circles in the same places, with the digits and the date faded out.
+
+**Nothing on either face can be pressed.** Saying `Hey Kai` is what crosses
+over, and a goodbye or 30 s of nothing said is what comes back — see the voice
+loop below. `ui.c` is told which face to draw through `ui_view_set()` and has
+no opinion about how the platform decided; it does not even own a `lv_button`
+any more, which is why `LV_FONT_MONTSERRAT_32` came out of `lv_conf.h`. The
+touch panel is still initialised on the device: the face is a thing to tap
+later, and the eyes deliberately have `LV_OBJ_FLAG_CLICKABLE` off so they
+cannot swallow that tap.
 
 **The morph** takes 400 ms. Each eye is an `lv_obj` that starts as the digit
 group's own box — same size, same centre, `LV_RADIUS_CIRCLE`, invisible — so
@@ -405,17 +423,16 @@ about the centre**: they are the two eyes. Keep them independent — do not
 merge them into a single label and do not put a fixed separator between them.
 
 **The layout rule is a 32 px margin.** Nothing comes closer than that to an
-edge of the panel. `UI_EDGE_MARGIN` is the constant; the 94 px group offset,
-the vertical centring of the time-and-date stack and the button's distance
-from the bottom all derive from it. It is also what caps the digits at 118 px:
+edge of the panel. `UI_EDGE_MARGIN` is the constant, and the 94 px group
+offset derives from it. It is also what caps the digits at 118 px:
 two 158 px groups plus two 32 px margins leave 30 px between the groups, and
 a larger font would close that gap.
 
 The corners are safe to write in. A corner label's outermost pixel sits 32 px
 in on both axes, which stays inside the panel's rounded corner for any corner
 radius up to about 109 px — more than anything a 410 x 502 panel is likely to
-have. The bottom two clear the button as well: the speaker ends 43 px short of
-it and the microphone starts 51 px past it.
+have. The bottom two have the whole width between them now that no button
+sits there, and the centred stack clears them by more than 80 px.
 
 ## The voice loop
 
@@ -443,14 +460,46 @@ chunker is the other half of that job and is deliberately not translated yet:
 it cuts a streaming reply at sentence seams so speech starts before the text
 is finished, and with an echo there is nothing to stream.
 
+**The transcriber is the wake-word engine.** There is no button and no
+wake-word model on a Mac, so the microphone is open from start-up, every
+utterance in the room is recorded and transcribed, and the watch wakes when
+its own name comes back in the text. `WAKE` is a table rather than one string
+because Parakeet has never been shown that name and spells it a few different
+ways; it is the greeting that is matched, not the name alone, or *Kaiser* and
+half the German news would wake the watch. Whatever follows the greeting is
+the first turn, so `Hey Kai, hallo` wakes it and answers `hallo` in one go.
+
+This is the one part of the loop the device will not copy. An ESP32-S3 runs
+ESP-SR locally and opens a connection only once it has heard its name — the
+host sends everything because it has nothing better, not because that is the
+design.
+
+**Two ways back to the clock, because a misheard word must not trap you.** A
+goodbye — `tschüss`, `quit`, `stop` — matched against the whole transcript
+rather than as a substring, so *stopp mal die Musik* is a thing to answer; and
+`VOICE_IDLE_MS`, 30 s with nothing said, which needs no word at all.
+`record()` takes that as a deadline on the silence *before* the first word,
+and `VOICE_WAIT_FOREVER` is the same function asleep, where there is nothing
+to time out of.
+
 **Everything runs on its own thread.** A turn costs seconds and LVGL is single
-threaded, so the loop cannot live in `lv_timer_handler()`. It publishes two
-booleans through SDL atomics, `status_tick()` in `main.c` reads them once a
-second, and `ui_status_set()` carries them the rest of the way. The button
-arrives from the other direction through `ui_on_view_change()`, so one press
-morphs the digits into eyes and opens the microphone together, and `Quit`
-closes it — mid-sentence if a reply is playing, which is what makes the button
-an interrupt.
+threaded, so the loop cannot live in `lv_timer_handler()`. It publishes three
+booleans through SDL atomics. `status_tick()` in `main.c` reads two of them
+once a second and `ui_status_set()` carries them the rest of the way;
+`view_tick()` reads `voice_awake()` ten times a second and hands it to
+`ui_view_set()`, which is idempotent so nine of those ten cost nothing. The
+faster timer is the point: the eyes come up as the wake phrase lands rather
+than up to a second later.
+
+`voice_listening()` is `awake && recording`, not `recording` alone. The
+microphone really is open the whole time, but a corner that is always lit says
+nothing — lit means the next thing said is meant for the assistant.
+
+**Nothing interrupts a reply any more.** The button used to, mid-sentence.
+Talking over the assistant means being heard while it is speaking, which needs
+the acoustic echo cancellation this half-duplex loop has none of — the same
+reason the two corner flags are independent. ESP-SR gives the S3 that, and the
+interrupt comes back with it.
 
 **No libraries beyond SDL2**, which is what `SPEC.md` allows. So the HTTP
 client is a socket, a request written by hand and a reply read back; the JSON
@@ -467,7 +516,9 @@ Four things about it are load-bearing:
   optional. They are gitignored: the clip is a recording of a person and this
   repository is licensed. Without them the loop does not start and the two
   corners stay dim, the same answer the firmware gives an unconfigured SSID.
-  Copy them from `~/workspace/kai/orchestrator/voices/`.
+  Copy them from `~/workspace/kai/orchestrator/voices/`. Without them the
+  watch is a clock and nothing else: saying its name does nothing, because
+  nothing is listening for it.
 - **The clip and its words travel together.** The server aligns one against
   the other and rejects the audio on its own.
 - **16 kHz mono in, whatever comes back out.** `sdl2-compat` opens the
@@ -498,21 +549,34 @@ permission for the terminal, which is not granted here, so window screenshots
 fail with `could not create image from display`. `test_ui.c` is the way round
 it, and `make test` runs it: it creates a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
-`ui_build()`, steps a fake tick source, clicks the button through
-`lv_obj_send_event()`, and checks geometry, opacity, label text and the pixels
-themselves. 80 checks. Seven of them have been made to fail on purpose:
+`ui_build()`, steps a fake tick source, drives `ui_view_set()` the way
+`host/main.c` does, and checks geometry, opacity, label text and the pixels
+themselves. 83 checks. Seven of them have been made to fail on purpose:
 fading a corner readout out with the clock, putting the edge margin back to
-16, letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`, and four ways of getting
-`ui_on_view_change()` wrong — never calling it, flipping which view it
-reports, reporting one from `ui_build()`, and dropping the `NULL` guard, which
-takes the whole run down with a segfault rather than printing a failure. Do
-that to any check you add — a check that has never failed is a check you have
-not tested.
+16, letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`, leaving `UI_STACK_TOP`
+reserving the strip the button used to sit in, and three ways of getting
+`ui_view_set()` wrong — flipping which flag means which view, restarting the
+morph when told the view it is already in, and dropping the guard against
+being told anything before `ui_build()`, which takes the whole run down rather
+than printing a failure. Do that to any check you add — a check that has never
+failed is a check you have not tested.
 
-Rebuild with the object removed (`rm build/CMakeFiles/kai_ui.dir/ui.c.o`) when
-trying this. Two edits a second apart can leave `make` convinced `ui.c` is
-older than its object, and a stale binary passing is worse than no check at
-all.
+The last two are worth knowing the shape of. The morph and the blink drive the
+same property, so a `ui_view_set()` that is not idempotent silently kills the
+blink and nothing else — which is why the test re-asserts the view on *every*
+frame for nine seconds rather than twice in a row. And the missing `NULL`
+guard hangs rather than crashing: `LV_USE_LOG` is off and LVGL's assert
+handler is `while(1)`, so a broken run has to be given a watchdog.
+
+Rebuild with the object removed when trying this:
+
+    rm build/CMakeFiles/kai_ui.dir/ui/ui.c.o    # note the ui/ — it mirrors the source tree
+
+Two edits a second apart can leave `make` convinced `ui.c` is older than its
+object, and a stale binary passing is worse than no check at all. `touch` is
+not enough on its own: `make` compares whole seconds, so a source touched and
+built inside the same second still looks up to date. There is no `timeout` on
+this machine either — background the run and kill it.
 
 Two things to know before writing another renderer like it:
 
