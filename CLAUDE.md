@@ -77,11 +77,28 @@ and look at what it leaves undefined. Anything but `lv_*` and libc is a leak:
     clang -std=c11 -DLV_CONF_INCLUDE_SIMPLE -I. -c ui.c -o /tmp/ui.o
     nm -u /tmp/ui.o | grep -i 'sdl\|esp_'    # must print nothing
 
-Today that list is `lv_*` plus `time` and `localtime_r`, and nothing else. Do
+`make check` runs exactly this, plus `-Wall -Wextra -Werror` on the same
+compile. Today that list is `lv_*` plus `time` and `localtime_r`, and nothing
+else. Do
 not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
 
 ## Build and run
+
+    make run
+
+`make` on its own is `make check`: the `lv_conf.h` liveness grep above, the
+build, and the boundary check below, in that order. `make ci` runs those same
+gates against the commit, which is what catches a file that was never added —
+it symlinks this checkout's `lvgl/` into the copy, since a gitignored
+directory is never in the archive. `make clean` removes `build/`.
+
+The Makefile is the baseline's (`stack/makefile.md`) with CMake in place of
+the Go toolchain, minus three things this project has no work for: `fmt` (no
+formatter is set up, and picking one now would reflow every hand-laid line),
+`test` (no suite yet — the headless render at the bottom of this file is the
+closest thing) and the `.env` line in `run` (the simulator reads no
+configuration). Underneath it is only:
 
     cmake -S . -B build
     cmake --build build -j
