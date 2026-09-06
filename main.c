@@ -10,8 +10,11 @@
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
+#include <stdlib.h>
+
 #include "lvgl/lvgl.h"
 #include "ui.h"
+#include "voice.h"
 
 /* Waveshare ESP32-S3-Touch-AMOLED-2.06 panel, at 1:1 scale so that what
  * lands on screen here is what lands on the device. */
@@ -24,35 +27,37 @@
 
 #define STATUS_PERIOD_MS 1000
 
-/* The host has no fuel gauge, no radio and no microphone, so the corner
- * readouts get a stand-in: the charge walks down to nearly empty, charges
- * back up, and the wake-word engine's microphone opens now and then. It moves
- * far too fast to be real, on purpose — every state a readout can show goes
- * past while you watch. The firmware replaces this with the real readings. */
+/* The charge and the radio are still a stand-in: reading either on a Mac
+ * means a framework this simulator has no business linking, and neither is
+ * what the watch is for. The charge walks down to nearly empty and charges
+ * back up, far too fast to be real, so every state the readout can show goes
+ * past while you watch.
+ *
+ * The bottom two corners are no longer faked. They are the voice loop's own
+ * microphone and speaker, read here and handed straight on — which is the
+ * point of the struct: ui.c is told the same two booleans either way and
+ * never learns that one pair is invented and the other is not. */
 static void status_tick(lv_timer_t * timer)
 {
-    static ui_status_t fake = { .battery_pct = 87, .wifi_up = true };
-    static uint32_t ticks;
-    uint32_t phase;
+    static ui_status_t status = { .battery_pct = 87, .wifi_up = true };
 
     LV_UNUSED(timer);
 
-    if (fake.charging) {
-        fake.battery_pct++;
-        if (fake.battery_pct >= 100) fake.charging = false;
+    if (status.charging) {
+        status.battery_pct++;
+        if (status.battery_pct >= 100) status.charging = false;
     }
     else {
-        fake.battery_pct--;
-        if (fake.battery_pct <= 5) fake.charging = true;
+        status.battery_pct--;
+        if (status.battery_pct <= 5) status.charging = true;
     }
 
-    /* Idle, listening, then speaking. They are separate flags rather than a
-     * mode, so a firmware with echo cancellation can raise both at once. */
-    phase = ticks++ % 12;
-    fake.listening = phase >= 2 && phase < 6;
-    fake.speaking = phase >= 7 && phase < 11;
+    /* Separate flags rather than a mode, so a loop with echo cancellation can
+     * raise both at once. This one is half duplex and never does. */
+    status.listening = voice_listening();
+    status.speaking = voice_speaking();
 
-    ui_status_set(&fake);
+    ui_status_set(&status);
 }
 
 int main(void)
@@ -74,6 +79,17 @@ int main(void)
 
     ui_build();
     lv_timer_ready(lv_timer_create(status_tick, STATUS_PERIOD_MS, NULL));
+
+    /* The button is what wakes the assistant, so the two arrive together: the
+     * digits morph into eyes and the microphone opens on the same press. The
+     * loop is quiet without voices/kai.opus, and the corners stay dim.
+     *
+     * LV_SDL_DIRECT_EXIT means closing the window calls exit() from inside
+     * lv_timer_handler(), so the thread is stopped from there rather than
+     * after the loop, which is not reachable. */
+    ui_on_view_change(voice_listen);
+    voice_start();
+    atexit(voice_stop);
 
     /* LV_SDL_DIRECT_EXIT is 1 in lv_conf.h: closing the window ends the process. */
     for (;;) {

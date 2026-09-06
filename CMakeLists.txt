@@ -42,7 +42,11 @@ add_library(kai_ui STATIC
 )
 target_link_libraries(kai_ui PUBLIC lvgl)
 
-add_executable(kai_sim main.c)
+# voice.c is host-only, like main.c: it is the microphone, the two speech
+# services and the speaker. Deliberately not in kai_ui and not in kai_test —
+# the boundary check compiles the portable half alone, and `make test` has to
+# pass with no oMLX server and no audio device anywhere near it.
+add_executable(kai_sim main.c voice.c)
 target_link_libraries(kai_sim PRIVATE kai_ui PkgConfig::SDL2)
 
 # Renders the UI into a byte array and checks what came out. `make test`.

@@ -117,6 +117,19 @@ static void click_button(void)
     lv_obj_send_event(child(BUTTON), LV_EVENT_CLICKED, NULL);
 }
 
+/* What ui_on_view_change() reported. The button is the only way the platform
+ * learns the assistant was asked for — the simulator opens a microphone on
+ * it — so a miscount or a flipped sense is a loop that listens on the clock
+ * face or goes deaf on the assistant's. */
+static int  view_changes;
+static bool told_assistant;
+
+static void on_view_change(bool assistant)
+{
+    view_changes++;
+    told_assistant = assistant;
+}
+
 /* The label inside the button, which is the only thing that names the view. */
 static const char * button_text(void)
 {
@@ -343,8 +356,11 @@ int main(void)
     lv_display_set_buffers(display, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(display, flush_cb);
 
+    ui_on_view_change(on_view_change);
     ui_build();
     pump(32);
+    CHECK(view_changes == 0, "ui_build() reported %d view changes; arriving on the clock is not one",
+          view_changes);
 
     check_structure();
     check_layout();
@@ -365,6 +381,8 @@ int main(void)
     CHECK(opa_of(child(WIFI)) == LV_OPA_COVER && opa_of(child(BATTERY)) == LV_OPA_COVER &&
           opa_of(child(SPEAKER)) == LV_OPA_COVER && opa_of(child(MIC)) == LV_OPA_COVER,
           "a corner readout left with the clock; all four sit over both views");
+    CHECK(view_changes == 1, "one press reported %d changes", view_changes);
+    CHECK(told_assistant, "the press to the assistant reported the clock");
 
     printf("blink\n");
     shortest = watch_blinks(9000, &blinks);
@@ -376,10 +394,20 @@ int main(void)
     click_button();
     pump(600);
     expect_clock_view("back on the clock");
+    CHECK(view_changes == 2, "two presses reported %d changes", view_changes);
+    CHECK(!told_assistant, "the press back to the clock reported the assistant");
 
     shortest = watch_blinks(9000, &blinks);
     CHECK(blinks == 0, "the eye blinked %d times on the clock face", blinks);
     CHECK(shortest == GROUP_HEIGHT, "the eye box changed height on the clock face");
+
+    /* NULL is the default and has to stay harmless: the firmware has nothing
+     * to hand this yet, and a call through it would take the watch down. */
+    ui_on_view_change(NULL);
+    click_button();
+    pump(600);
+    CHECK(view_changes == 2, "the button reported %d changes after the callback was cleared",
+          view_changes);
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures != 0;

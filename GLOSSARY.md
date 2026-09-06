@@ -29,8 +29,8 @@ along the bottom. All four stay up in both views — they are a status layer ove
 whichever face is showing. _Avoid: badge, indicator, icon._
 
 **Device** — the board a build targets, as opposed to the host. Half of the
-boundary rule: portable code runs on both, `main.c` runs on the host,
-`firmware/main/` runs on the device. _Avoid: target, hardware, embedded side._
+boundary rule: portable code runs on both, `main.c` and `voice.c` run on the
+host, `firmware/main/` runs on the device. _Avoid: target, hardware, embedded side._
 
 **Dim** — how a corner draws a reading the platform does not have: `LV_OPA_30`,
 never hidden. An empty corner reads as a bug, a dim one reads as "no". It is
@@ -48,10 +48,21 @@ life as its digit group's own box — same size, same centre, already round,
 invisible — so the morph is that box changing shape rather than a new thing
 appearing. _Avoid: pupil, iris, dot._
 
+**Gate** — the loudness a block of microphone audio has to clear to count as
+speech, and the 800 ms below it that ends a turn. Measured, not chosen: a
+quiet room reads a mean RMS of 42, speech runs in the thousands, and
+`VOICE_SILENCE_RMS` sits at 500 between them. _Avoid: VAD, threshold, endpoint
+detection._
+
 **Group** — the hour pair or the minute pair, as one object. There are two,
 placed symmetrically about the centre, and they stay separate because they are
 the two eyes: never merged into one label, never given a separator between
 them. _Avoid: digit pair, half, cluster._
+
+**Heard** — the transcript of one turn, as Parakeet returned it. It is what
+the assistant says back, word for word, because the point of the echo is to
+hear what the microphone and the transcriber actually produced. _Avoid:
+utterance, query, prompt._
 
 **Host** — the machine a build runs the simulator on, as opposed to the device.
 Also the half of any build that knows which of the two it is: window or panel,
@@ -71,6 +82,12 @@ screen, display, LCD._
 both builds compile unchanged. LVGL and the C standard library only. _Avoid:
 shared code, common, core._
 
+**Reference clip** — `voices/kai.opus` and the transcript beside it, the
+recording the synthesiser borrows a voice from.
+`chatterbox-multilingual-v3` ships no voices of its own and answers 500
+without one, so it is a prerequisite rather than a setting. Gitignored: it is
+a recording of a person. _Avoid: sample, voice file, speaker prompt._
+
 **Status** — the struct `ui_status_t` and its setter, the one way a fact the UI
 cannot reach for itself gets in: the charge, the radio, the microphone, the
 speaker. The simulator fills it with a fake, the firmware fills it from the
@@ -87,6 +104,16 @@ not shift sideways when the time changes. Montserrat's figures are proportional
 impossible to miss. `--no-kerning` belongs to the same decision. _Avoid:
 monospace digits, fixed-width numerals._
 
+**Turn** — one exchange: the microphone opens, a sentence arrives, it is
+transcribed, answered and played back. The voice loop takes turns for as long
+as the assistant is awake, and `Quit` ends the one in progress. _Avoid:
+exchange, round, interaction._
+
 **View** — the clock view or the assistant view. There is one screen and two
 views on it, and the morph is how it gets from one to the other. _Avoid:
 screen, page, mode._
+
+**Voice loop** — `voice.c`: the microphone, Parakeet, Chatterbox and the
+speaker, on a thread of its own. Host-only, and the reason the bottom two
+corners are no longer faked. _Avoid: audio pipeline, speech stack, assistant
+backend._

@@ -44,3 +44,23 @@ layout — turns the fast loop back into guesswork.
 - The panel, the touch and the platform readouts reach the UI only through
   `ui_build()` and `ui_status_set()`.
 - `make check` still passes on a machine with no ESP-IDF on it.
+
+# The voice loop
+
+**Job.** Hear a sentence, transcribe it, and say it back, so the microphone
+and speaker corners show something true.
+
+**Why.** The board has no codec wired up and no wake word, and the two
+readouts that stand for them were invented by a timer. A loop that runs on the
+host against the real speech services is what turns them into a reading —
+and it is the shortest path through the whole pipeline, so a turn that breaks
+there breaks everywhere.
+
+**Done means.**
+
+- Pressing `Hey Kai` opens the microphone; a sentence spoken into it comes
+  back out of the speakers, and the two corners light while it does.
+- `voice.c` is host-only and uses nothing but SDL2 and the C standard library:
+  no HTTP library, no JSON library.
+- `make check` still passes with no oMLX server running and no `voices/` in
+  the tree.

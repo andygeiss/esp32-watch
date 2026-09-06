@@ -9,3 +9,7 @@ firmware/build/
 firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
+
+# The clip KAI borrows its voice from, and what it says. A recording of a
+# person, so it stays out of a licensed repository; voice.c does without it.
+voices/

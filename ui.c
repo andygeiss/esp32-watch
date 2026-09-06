@@ -108,6 +108,7 @@ static ui_status_t status = { .battery_pct = -1 };
 static lv_obj_t * eyes[2];
 static lv_obj_t * button_label;
 static ui_view_t  view;
+static ui_view_cb_t view_cb;
 
 /* One property of one object, per animation frame. */
 static void anim_opa(void * obj, int32_t value)
@@ -199,6 +200,10 @@ static void view_set(ui_view_t next)
     }
 
     lv_label_set_text(button_label, assistant ? "Quit" : "Hey Kai");
+
+    /* Last, so whatever the platform does about it happens against a view
+     * that has already been told to change. */
+    if (view_cb != NULL) view_cb(assistant);
 }
 
 static void button_clicked(lv_event_t * event)
@@ -374,6 +379,11 @@ void ui_build(void)
 
     timer = lv_timer_create(clock_refresh, UI_REFRESH_PERIOD_MS, NULL);
     lv_timer_ready(timer); /* draw the real time now, not a second from now */
+}
+
+void ui_on_view_change(ui_view_cb_t cb)
+{
+    view_cb = cb;
 }
 
 void ui_status_set(const ui_status_t * next)

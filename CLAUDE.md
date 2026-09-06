@@ -90,8 +90,9 @@ This is the rule that matters most as the code grows.
 - **`ui.c` / `ui.h` and the three fonts — portable.** LVGL and the C standard
   library only. No SDL, no ESP-IDF, no `driver/` headers. Both builds compile
   these files *unchanged*, from where they sit at the repo root.
-- **`main.c` — host only.** SDL window, input devices, tick source, service
-  loop.
+- **`main.c` and `voice.c` — host only.** The SDL window, input devices, tick
+  source and service loop; and the microphone, the two speech services and the
+  speaker.
 - **`firmware/main/` — device only.** The same four jobs against the panel,
   plus the clock the board cannot read for itself, split over `main.c`,
   `board.c` and `net.c`. It replaces the root `main.c` rather than adding to
@@ -100,11 +101,19 @@ This is the rule that matters most as the code grows.
 New code goes on the portable side unless it genuinely needs the host; decide
 which side a new file is on before writing it.
 
-A fact the UI needs but cannot reach for itself — the battery, the radio —
-crosses in the other direction, through a struct and a setter in `ui.h`
-(`ui_status_t`, `ui_status_set()`). The host fills it with a fake, the
+A fact the UI needs but cannot reach for itself — the battery, the radio, the
+microphone — crosses in the other direction, through a struct and a setter in
+`ui.h` (`ui_status_t`, `ui_status_set()`). The host fills it with a fake, the
 firmware fills it from the hardware, and `ui.c` never learns which. That is the
 pattern for the next one too.
+
+The one fact that travels the other way is the button, through
+`ui_on_view_change()`: the platform cannot see a press, and waking an
+assistant is not something `ui.c` can do for itself. It is a single function
+pointer, `NULL` by default, and `ui.c` never learns what it does — the
+simulator opens a microphone on it, the firmware will wake a codec. Keep that
+seam this narrow. A second callback is a sign the UI is being asked to drive
+the platform rather than report to it.
 
 Two checks settle it, one on each side. The host's is the symbol list — compile
 the portable side alone and look at what it leaves undefined. Anything but
@@ -115,7 +124,8 @@ the portable side alone and look at what it leaves undefined. Anything but
 
 `make check` runs exactly this, plus `-Wall -Wextra -Werror` on the same
 compile. Today that list is `lv_*` plus `time` and `localtime_r`, and nothing
-else. Do
+else — `voice.c` is a whole voice loop and none of it shows up here, which is
+the point. Do
 not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
 
@@ -151,6 +161,11 @@ Prerequisites, with Homebrew at `/opt/homebrew` (arm64; `/usr/local` would mean
 an x86 install and is wrong for this machine):
 
     brew install cmake pkg-config sdl2
+
+The simulator runs without it, but the assistant only speaks once
+`voices/kai.opus` and `voices/kai.txt` are in place — see the voice loop
+below. `make run` starts the binary from the repository root, which is where
+those paths are relative to.
 
 For the board, with ESP-IDF exported into the shell first:
 
@@ -263,7 +278,7 @@ The same `ui_status_t` the simulator fakes, filled from what is actually there:
 |---|---|
 | `wifi_up` | real, from the station's `IP_EVENT_STA_GOT_IP` |
 | `battery_pct` | `-1`. There is no fuel gauge on this board, and the UI already draws `--%` for a charge it does not know — the honest reading, not an invented one |
-| `listening`, `speaking` | `false` until there is an audio path behind them: the ES8311 codec and a wake-word engine |
+| `listening`, `speaking` | `false` until there is an audio path behind them: the ES8311 codec and a wake-word engine. The simulator already fills both for real — see the voice loop |
 
 Each is one line in `status_tick()` when it arrives, and none of it reaches
 into `ui.c`. That is the point of the struct.
@@ -388,6 +403,79 @@ radius up to about 109 px — more than anything a 410 x 502 panel is likely to
 have. The bottom two clear the button as well: the speaker ends 43 px short of
 it and the microphone starts 51 px past it.
 
+## The voice loop
+
+`voice.c` is the simulator's audio path, and the reason the microphone and
+speaker corners are no longer faked. It is host-only, like `main.c`: the board
+has no codec wired up and no wake word yet, so the Mac's own microphone and
+speakers do the job the ES8311 will do later.
+
+It is a translation of four packages of `~/workspace/kai/orchestrator`, which
+is the same loop in Go:
+
+| Go | here |
+|---|---|
+| `internal/parakeet` | `transcribe()` — a multipart POST, one field read back |
+| `internal/chatterbox` | `synthesise()` — a JSON POST carrying the clip to clone |
+| `internal/echo` | `reply()` — the answer is the question, word for word |
+| `internal/app`'s turn state | an SDL thread and two atomics |
+
+**The answer is the question said back.** That is a mode rather than a
+placeholder — it is the shortest path through the whole pipeline, so a turn
+that breaks here breaks everywhere, and what comes out of the speaker is
+exactly what the transcriber heard. `reply()` is the one function a language
+model would go behind; nothing else would move. `internal/domain/speech.go`'s
+chunker is the other half of that job and is deliberately not translated yet:
+it cuts a streaming reply at sentence seams so speech starts before the text
+is finished, and with an echo there is nothing to stream.
+
+**Everything runs on its own thread.** A turn costs seconds and LVGL is single
+threaded, so the loop cannot live in `lv_timer_handler()`. It publishes two
+booleans through SDL atomics, `status_tick()` in `main.c` reads them once a
+second, and `ui_status_set()` carries them the rest of the way. The button
+arrives from the other direction through `ui_on_view_change()`, so one press
+morphs the digits into eyes and opens the microphone together, and `Quit`
+closes it — mid-sentence if a reply is playing, which is what makes the button
+an interrupt.
+
+**No libraries beyond SDL2**, which is what `SPEC.md` allows. So the HTTP
+client is a socket, a request written by hand and a reply read back; the JSON
+is a scanner for one string field, not a parser; and base64 and the WAV header
+are twenty lines each. That is not a workaround. The device will speak to the
+same two endpoints through `esp_http_client`, and a body built by hand ports
+where a libcurl call site would not.
+
+Four things about it are load-bearing:
+
+- **`chatterbox-multilingual-v3` ships no voice conditionals.** It answers
+  `500` — *"No conditionals available"* — to every request that carries no clip
+  to clone, so `voices/kai.opus` and its transcript in `voices/kai.txt` are not
+  optional. They are gitignored: the clip is a recording of a person and this
+  repository is licensed. Without them the loop does not start and the two
+  corners stay dim, the same answer the firmware gives an unconfigured SSID.
+  Copy them from `~/workspace/kai/orchestrator/voices/`.
+- **The clip and its words travel together.** The server aligns one against
+  the other and rejects the audio on its own.
+- **16 kHz mono in, whatever comes back out.** `sdl2-compat` opens the
+  microphone at exactly 16 kHz mono with no resampling, and nothing here
+  resamples, so a device that will not open at that rate is refused rather
+  than transcribed at the wrong speed. The reply has been 24 kHz mono every
+  time, but it says so in its own header, so `play()` follows the file.
+- **The turn ends on silence, measured rather than guessed.** A quiet room
+  reads a mean RMS of 42 and peaks at 82; speech runs in the thousands. The
+  gate is at 500, and 800 ms under it ends the turn. Raise `VOICE_SILENCE_RMS`
+  in a louder room.
+
+Measured on this machine, against the oMLX server at `127.0.0.1:8000`:
+transcription answers in about **0.9 s** for 3 s of speech, and synthesis
+takes **2.6-3.3 s** to produce 3 s of it — roughly real time, which is the
+number the chunker exists to hide once there is a model writing the reply.
+
+None of it is in `check`. The gate has to stay runnable on a Mac with nothing
+on it, so `kai_test` never links `voice.c`, and the loop itself needs no
+configuration: the endpoint and both model names are `#define`s at the top of
+the file.
+
 ## Verifying a render without a screenshot
 
 `screencapture` and `osascript` need Screen Recording and Accessibility
@@ -397,10 +485,19 @@ it, and `make test` runs it: it creates a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
 `ui_build()`, steps a fake tick source, clicks the button through
 `lv_obj_send_event()`, and checks geometry, opacity, label text and the pixels
-themselves. 74 checks. Three of them have been made to fail on purpose:
+themselves. 80 checks. Seven of them have been made to fail on purpose:
 fading a corner readout out with the clock, putting the edge margin back to
-16, and letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`. Do that to any check you add —
-a check that has never failed is a check you have not tested.
+16, letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`, and four ways of getting
+`ui_on_view_change()` wrong — never calling it, flipping which view it
+reports, reporting one from `ui_build()`, and dropping the `NULL` guard, which
+takes the whole run down with a segfault rather than printing a failure. Do
+that to any check you add — a check that has never failed is a check you have
+not tested.
+
+Rebuild with the object removed (`rm build/CMakeFiles/kai_ui.dir/ui.c.o`) when
+trying this. Two edits a second apart can leave `make` convinced `ui.c` is
+older than its object, and a stale binary passing is worse than no check at
+all.
 
 Two things to know before writing another renderer like it:
 
