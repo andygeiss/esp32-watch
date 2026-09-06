@@ -508,7 +508,7 @@ are twenty lines each. That is not a workaround. The device will speak to the
 same two endpoints through `esp_http_client`, and a body built by hand ports
 where a libcurl call site would not.
 
-Four things about it are load-bearing:
+Five things about it are load-bearing:
 
 - **`chatterbox-multilingual-v3` ships no voice conditionals.** It answers
   `500` — *"No conditionals available"* — to every request that carries no clip
@@ -530,6 +530,17 @@ Four things about it are load-bearing:
   reads a mean RMS of 42 and peaks at 82; speech runs in the thousands. The
   gate is at 500, and 800 ms under it ends the turn. Raise `VOICE_SILENCE_RMS`
   in a louder room.
+- **The close box has to reach `voice_stop()` before it reaches `SDL_Quit()`,**
+  which is what `quit_first()` in `host/main.c` is for. LVGL's SDL backend
+  answers `SDL_QUIT` with `SDL_Quit()` and *then* `exit(0)` — `lv_sdl_window.c`
+  — so the audio devices are torn down while the voice thread is inside
+  `SDL_DequeueAudio()`, and the process dies of a bus error (`make: *** [run]
+  Bus error: 10`) before any `atexit()` handler runs. `quit_first()` pumps the
+  event queue itself and peeks for `SDL_QUIT`, leaving the event there for LVGL
+  to find a moment later; all it does is get the microphone closed first. This
+  only started biting when the microphone stopped being opened on a button
+  press and started being open the whole time — before that, a window closed on
+  the clock face never had a device to pull out.
 
 Measured on this machine, against the oMLX server at `127.0.0.1:8000`:
 transcription answers in about **0.9 s** for 3 s of speech, and synthesis

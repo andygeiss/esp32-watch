@@ -76,6 +76,28 @@ static void view_tick(lv_timer_t * timer)
     ui_view_set(voice_awake());
 }
 
+/* The close box, seen before LVGL sees it.
+ *
+ * LVGL's SDL backend answers SDL_QUIT with SDL_Quit() and then exit(), in that
+ * order — lv_sdl_window.c. SDL_Quit() takes the audio devices down, and the
+ * voice thread is sitting inside SDL_DequeueAudio() at the time, so the
+ * process dies of a bus error before any atexit() handler runs. Registering
+ * voice_stop() there is not early enough: it has to happen while SDL is still
+ * up.
+ *
+ * SDL_PumpEvents() fills the queue and the peek leaves the event in it, so
+ * LVGL still finds SDL_QUIT on its own poll a moment later and quits exactly
+ * as it did before. All this does is close the microphone first. It costs a
+ * moment — up to a second if a request is in flight, which is the socket's own
+ * timeout. */
+static void quit_first(void)
+{
+    SDL_Event quit;
+
+    SDL_PumpEvents();
+    if (SDL_PeepEvents(&quit, 1, SDL_PEEKEVENT, SDL_QUIT, SDL_QUIT) > 0) voice_stop();
+}
+
 int main(void)
 {
     SDL_SetMainReady();
@@ -103,14 +125,19 @@ int main(void)
      * a clock and the two bottom corners stay dim.
      *
      * LV_SDL_DIRECT_EXIT means closing the window calls exit() from inside
-     * lv_timer_handler(), so the thread is stopped from there rather than
-     * after the loop, which is not reachable. */
+     * lv_timer_handler(), so the loop below is never left. atexit() is the
+     * backstop for every other way out of this process; the close box itself
+     * is quit_first()'s job, because by the time atexit() runs SDL is already
+     * gone. voice_stop() takes both, and is harmless the second time. */
     voice_start();
     atexit(voice_stop);
 
     /* LV_SDL_DIRECT_EXIT is 1 in lv_conf.h: closing the window ends the process. */
     for (;;) {
-        uint32_t idle_ms = lv_timer_handler();
+        uint32_t idle_ms;
+
+        quit_first();
+        idle_ms = lv_timer_handler();
         if (idle_ms < 1) idle_ms = 1;
         if (idle_ms > FRAME_INTERVAL_MS) idle_ms = FRAME_INTERVAL_MS;
         SDL_Delay(idle_ms);
