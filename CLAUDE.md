@@ -188,6 +188,14 @@ the switch is that box growing square while the digits fade off the front of
 it. Nothing moves; only size and opacity animate, and `lv_obj_align` keeps
 each eye on its centre as it resizes.
 
+**The blink** is one infinite animation per eye, started by the morph's own
+completion callback: the height pulls in to a 12 px line over 70 ms, back out
+over 70 ms, then holds open for 3.6 s. It drives the same property the morph
+does, which is the point — `lv_anim_start` replaces an animation with the same
+object and callback, so switching back to the clock cancels the blink with no
+bookkeeping. It is also why that callback asks which view it is in before
+starting: it runs at the end of every eye resize, in both directions.
+
 This is why the two digit groups are **separate objects placed symmetrically
 about the centre**: they are the two eyes. Keep them independent — do not
 merge them into a single label and do not put a fixed separator between them.

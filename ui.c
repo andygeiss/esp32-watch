@@ -60,6 +60,12 @@ LV_FONT_DECLARE(ui_font_date_94);
 #define UI_EYE_SIZE 120
 #define UI_MORPH_MS 400
 
+/* The blink: the eye's height pulls in to a line and lets back out, then
+ * holds open until the next one. */
+#define UI_EYE_SHUT_H     12
+#define UI_BLINK_MS       70
+#define UI_BLINK_PAUSE_MS 3600
+
 #define UI_REFRESH_PERIOD_MS 1000
 
 typedef enum {
@@ -93,7 +99,8 @@ static void anim_height(void * obj, int32_t value)
 /* Every animation starts from where the property is now, so tapping again
  * mid-morph turns the movement around instead of jumping. lv_anim_start
  * replaces a running animation of the same object and property. */
-static void morph(lv_obj_t * obj, lv_anim_exec_xcb_t exec, int32_t from, int32_t to)
+static void morph(lv_obj_t * obj, lv_anim_exec_xcb_t exec, int32_t from, int32_t to,
+                  lv_anim_completed_cb_t completed)
 {
     lv_anim_t anim;
 
@@ -103,12 +110,40 @@ static void morph(lv_obj_t * obj, lv_anim_exec_xcb_t exec, int32_t from, int32_t
     lv_anim_set_values(&anim, from, to);
     lv_anim_set_duration(&anim, UI_MORPH_MS);
     lv_anim_set_path_cb(&anim, lv_anim_path_ease_in_out);
+    lv_anim_set_completed_cb(&anim, completed);
     lv_anim_start(&anim);
 }
 
 static void fade(lv_obj_t * obj, lv_opa_t to)
 {
-    morph(obj, anim_opa, lv_obj_get_style_opa(obj, LV_PART_MAIN), to);
+    morph(obj, anim_opa, lv_obj_get_style_opa(obj, LV_PART_MAIN), to, NULL);
+}
+
+/* Blinking runs off the same property as the morph, so switching back to the
+ * clock replaces it and there is nothing to stop by hand. The first blink
+ * waits out a full pause, so arriving in the assistant view is not a flicker. */
+static void blink(lv_obj_t * eye)
+{
+    lv_anim_t anim;
+
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, eye);
+    lv_anim_set_exec_cb(&anim, anim_height);
+    lv_anim_set_values(&anim, UI_EYE_SIZE, UI_EYE_SHUT_H);
+    lv_anim_set_duration(&anim, UI_BLINK_MS);         /* the lid down */
+    lv_anim_set_reverse_duration(&anim, UI_BLINK_MS); /* and back up */
+    lv_anim_set_delay(&anim, UI_BLINK_PAUSE_MS);
+    lv_anim_set_repeat_delay(&anim, UI_BLINK_PAUSE_MS);
+    lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim);
+}
+
+/* The end of an eye resize, either direction, so it has to ask which view
+ * that resize was heading for. LVGL has already taken this animation off its
+ * list, so starting the next one here is safe. */
+static void blink_when_open(lv_anim_t * resize)
+{
+    if (view == UI_VIEW_ASSISTANT) blink(resize->var);
 }
 
 /* The clock and the assistant are the same two objects at the same two
@@ -128,9 +163,9 @@ static void view_set(ui_view_t next)
     for (i = 0; i < 2; i++) {
         fade(eyes[i], assistant ? LV_OPA_COVER : LV_OPA_TRANSP);
         morph(eyes[i], anim_width, lv_obj_get_width(eyes[i]),
-              assistant ? UI_EYE_SIZE : UI_GROUP_WIDTH);
+              assistant ? UI_EYE_SIZE : UI_GROUP_WIDTH, NULL);
         morph(eyes[i], anim_height, lv_obj_get_height(eyes[i]),
-              assistant ? UI_EYE_SIZE : UI_GROUP_HEIGHT);
+              assistant ? UI_EYE_SIZE : UI_GROUP_HEIGHT, blink_when_open);
     }
 
     lv_label_set_text(button_label, assistant ? "Quit" : "Hey Kai");
