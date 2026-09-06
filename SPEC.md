@@ -1,6 +1,6 @@
 # SPEC
 
-**Job.** Build and look at the KAI watch UI on macOS, at the exact panel size,
+**Job.** Build and look at the ESP32 Watch UI on macOS, at the exact panel size,
 without flashing hardware.
 
 **Why.** Reflashing an ESP32-S3 for every layout tweak makes the edit–look loop

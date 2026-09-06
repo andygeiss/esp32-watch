@@ -134,6 +134,30 @@ size_t voice_turn_samples(const voice_turn_t * turn);
 /* The name, and the goodbye.                                                 */
 /* ------------------------------------------------------------------ */
 
+/* How much of a wake phrase list there is room for. Eight spellings is more
+ * than the transcriber has ever produced for one name, and the bytes are a
+ * static buffer because turn.c is not the file that owns an allocator. */
+#define VOICE_WAKE_MAX   8
+#define VOICE_WAKE_BYTES 256
+
+/**
+ * What the watch answers to: a '|'-separated list of spellings, because the
+ * transcriber has never been shown the name and does not write it down the
+ * same way twice. Case and punctuation are taken off here, so "Hey Kai!" and
+ * "hey kai" are the same phrase and whoever configures one need not know
+ * which.
+ *
+ * NULL or an empty string means the built-in list, which is the only place
+ * those spellings are written down — a configuration that wanted the default
+ * would otherwise have to be a second copy of it.
+ *
+ * False means the list did not fit, or one of its phrases was empty; the
+ * built-in list stays in force, and the platform has something to log. The
+ * platform is where this comes from: a #define on the host, Kconfig on the
+ * device, the same way the server address does.
+ */
+bool voice_wake_set(const char * phrases);
+
 /**
  * What was said after the watch's name, or NULL if its name is not in there.
  * An empty string means the name and nothing else. The returned pointer is

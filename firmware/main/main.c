@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * Device entry point for the KAI watch.
+ * Device entry point for the ESP32 Watch.
  *
  * The firmware half of the host/device boundary: this file is to the panel
  * what the repo root's main.c is to the SDL window. Both bring up a display,

@@ -162,7 +162,10 @@ size_t voice_turn_samples(const voice_turn_t * turn)
 /* KAI is a name the transcriber has never been shown, so it writes down
  * whichever German word sounded closest, and not the same one every time.
  * More than one spelling is the point of the table; add to it from what turns
- * up in the log rather than guessing at the phonetics.
+ * up in the log rather than guessing at the phonetics. This is the default:
+ * voice_wake_set() below puts whatever the platform was configured with in
+ * front of it, and an empty configuration means this list rather than a
+ * second copy of it.
  *
  * It is the greeting that is matched, not the name on its own: Kaiser,
  * Kaimauer and a good many other ordinary German words start the same way,
@@ -195,6 +198,85 @@ static void lower(const char * in, char * out, size_t cap)
     out[i] = '\0';
 }
 
+/* The configured spellings, cleaned, laid end to end in one static buffer.
+ * Empty means WAKE above: the default is written down once, and a platform
+ * that wants it says nothing rather than repeating it. */
+static char   wake_buf[VOICE_WAKE_BYTES];
+static char * wake_set[VOICE_WAKE_MAX];
+static size_t wake_n;
+
+static size_t wake_count(void)
+{
+    return wake_n != 0 ? wake_n : VOICE_COUNT(WAKE);
+}
+
+static const char * wake_at(size_t i)
+{
+    return wake_n != 0 ? wake_set[i] : WAKE[i];
+}
+
+/* Letters, digits and single spaces survive; ASCII punctuation does not, so a
+ * phrase typed as someone would say it matches a transcript. Bytes above 127
+ * come through untouched — the ü of a German phrase is two of them, the same
+ * reason lower() leaves them alone. */
+static bool wake_keep(unsigned char c)
+{
+    return c >= 0x80 || c == ' ' || (c >= '0' && c <= '9') ||
+           (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/* One phrase into wake_buf at *at, terminated, with the spaces at either end
+ * and any run in the middle collapsed. False if it does not fit or is empty. */
+static bool wake_clean(const char * in, size_t len, size_t * at)
+{
+    size_t start = *at;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char) in[i];
+
+        if (!wake_keep(c)) continue;
+        /* No space in front, and never two in a row. */
+        if (c == ' ' && (*at == start || wake_buf[*at - 1] == ' ')) continue;
+        if (*at + 1 >= sizeof(wake_buf)) return false;
+        wake_buf[(*at)++] = (char) tolower(c);
+    }
+    while (*at > start && wake_buf[*at - 1] == ' ') (*at)--; /* nor behind */
+
+    if (*at == start) return false; /* an empty phrase wakes on every word */
+    wake_buf[(*at)++] = '\0';
+    return true;
+}
+
+bool voice_wake_set(const char * phrases)
+{
+    size_t at = 0;
+    size_t n = 0;
+
+    wake_n = 0; /* the built-in list, unless a whole one is read below */
+    if (phrases == NULL) return true;
+
+    while (*phrases != '\0') {
+        size_t len = 0;
+        size_t start = at;
+        bool more;
+
+        /* Split by hand rather than with strchr: this file's undefined
+         * symbols are a checked list, and one more would be one more. */
+        while (phrases[len] != '\0' && phrases[len] != '|') len++;
+        more = phrases[len] == '|';
+
+        if (n == VOICE_WAKE_MAX) return false;
+        if (!wake_clean(phrases, len, &at)) return false;
+
+        wake_set[n++] = wake_buf + start;
+        phrases += more ? len + 1 : len;
+    }
+
+    wake_n = n;
+    return true;
+}
+
 const char * voice_after_wake(const char * heard)
 {
     char lowered[VOICE_MAX_TEXT];
@@ -203,10 +285,11 @@ const char * voice_after_wake(const char * heard)
 
     lower(heard, lowered, sizeof(lowered));
 
-    for (i = 0; i < VOICE_COUNT(WAKE); i++) {
-        const char * at = strstr(lowered, WAKE[i]);
+    for (i = 0; i < wake_count(); i++) {
+        const char * phrase = wake_at(i);
+        const char * at = strstr(lowered, phrase);
         if (at == NULL) continue;
-        at += strlen(WAKE[i]);
+        at += strlen(phrase);
         if (rest == NULL || at < rest) rest = at;
     }
     if (rest == NULL) return NULL;

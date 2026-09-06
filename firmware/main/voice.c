@@ -415,6 +415,10 @@ void voice_start(void)
      * total. */
     voice_buf_alloc(&PSRAM);
 
+    if (!voice_wake_set(CONFIG_KAI_WAKE_PHRASE)) {
+        ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
+    }
+
     if (CONFIG_KAI_VOICE_HOST[0] == '\0') {
         ESP_LOGW(TAG, "no server configured — the watch stays a clock");
         return;

@@ -4,7 +4,7 @@
 /*******************************************************************************
  * Size: 18 px
  * Bpp: 4
- * Opts: --font /Users/andygeiss/workspace/waveshare-watch/lvgl/scripts/built_in_font/FontAwesome5-Solid+Brands+Regular.woff --range 0xF028,0xF130 --size 18 --bpp 4 --no-compress --no-prefilter --no-kerning --format lvgl --lv-font-name ui_font_assistant_18 -o /Users/andygeiss/workspace/waveshare-watch/ui_font_assistant_18.c
+ * Opts: --font /Users/andygeiss/workspace/esp32-watch/lvgl/scripts/built_in_font/FontAwesome5-Solid+Brands+Regular.woff --range 0xF028,0xF130 --size 18 --bpp 4 --no-compress --no-prefilter --no-kerning --format lvgl --lv-font-name ui_font_assistant_18 -o /Users/andygeiss/workspace/esp32-watch/ui_font_assistant_18.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

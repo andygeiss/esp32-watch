@@ -1,4 +1,4 @@
-# KAI watch
+# ESP32 Watch
 
 Two builds of one watch UI. An LVGL simulator that runs it on macOS at the
 exact panel size, so the interface can be built and seen without flashing
@@ -355,7 +355,7 @@ simulator's does — see the voice loop below.
 
 The board has no RTC, so `time(NULL)` counts from reset until something tells
 it otherwise, and SNTP over WiFi is the only thing on this board that can.
-Both are off by default. `idf.py -C firmware menuconfig`, under **KAI watch**:
+Both are off by default. `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
 an empty SSID keeps the radio down, the watch runs off its boot clock, and the
 WiFi corner draws dim — which is the reading that dimming is for. The timezone
 is compiled in there too, because the device has no locale to turn UTC into
@@ -532,6 +532,18 @@ different ways; it is the greeting that is matched, not the name alone, or
 greeting is the first turn, so `Hey Kai, hallo` wakes it and answers `hallo`
 in one go.
 
+**The phrase is configuration, and `Hey Kai` is its default.** The platform
+hands `voice_wake_set()` a `|`-separated list of spellings at start-up —
+`VOICE_WAKE_PHRASE` in `host/voice.c`, `CONFIG_KAI_WAKE_PHRASE` on the device
+— which is the crossing the server address already makes. An empty list means
+`WAKE` itself, so those six spellings stay written down exactly once and a
+platform that wants them says nothing rather than repeating them. Case and
+punctuation come off on the way in, so `Hey Kai!` and `hey kai` are one
+phrase and whoever configures one need not know which. A list that does not
+fit, or a phrase that cleans away to nothing, leaves the default in force and
+says so in the log: an empty phrase is a substring of everything and would
+wake the watch on every word in the room.
+
 **On the host this is the only option; on the device it is a choice, and the
 first one worth revisiting.** ESP-SR would hear the name on the S3 itself and
 open a connection only then — less radio, less battery, and no room audio
@@ -616,7 +628,7 @@ Five things about it are load-bearing:
 **The watch needs three things before it says a word**: an SSID, a server
 address, and that clip. All three are off by default and each one missing
 gives the same answer — a clock with two dim corners. `idf.py -C firmware
-menuconfig`, under **KAI watch**: `CONFIG_KAI_VOICE_HOST` is an address *on
+menuconfig`, under **ESP32 Watch**: `CONFIG_KAI_VOICE_HOST` is an address *on
 the network the watch joins*, not `127.0.0.1`, which on the watch means the
 watch.
 
@@ -635,10 +647,10 @@ None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
 all. `voice/turn.c` *is* in `check`, on both counts: it compiles clean under
 `-Werror` and its symbol list is inspected, which is exactly what it earns by
-being the file both platforms share. The server address is the one thing that
-is configuration — a `#define` on the host, Kconfig on the device — and the
-model names and the language are neither, because they are the same decision
-twice and live in `turn.h`.
+being the file both platforms share. The server address and the wake phrase
+are the two things that are configuration — a `#define` on the host, Kconfig
+on the device — and the model names and the language are neither, because
+they are the same decision twice and live in `turn.h`.
 
 ## Verifying a render without a screenshot
 

@@ -1,4 +1,4 @@
-menu "KAI watch"
+menu "ESP32 Watch"
 
     config KAI_WIFI_SSID
         string "WiFi SSID"
@@ -41,5 +41,28 @@ menu "KAI watch"
     config KAI_VOICE_PORT
         int "Speech server port"
         default 8000
+
+    config KAI_WAKE_PHRASE
+        string "Wake phrase"
+        default ""
+        help
+            What the watch answers to. There is no wake-word model on this
+            board: everything the room says is transcribed, and the watch
+            wakes when this turns up in the text.
+
+            Leave it empty and it listens for "hey kai" and the five other
+            spellings the transcriber has been seen to return for that name,
+            which is the list in voice/turn.c and the only place it is
+            written down.
+
+            Fill it in and it listens for that instead. Case and punctuation
+            do not matter. Give the spellings a transcriber is likely to
+            produce, separated by '|' — a name it has never been shown is
+            rarely written the same way twice:
+
+                hey ada|hey adah|hi ada
+
+            Match the greeting and not the name on its own, or every word
+            that merely starts the same way wakes the watch.
 
 endmenu

@@ -1,4 +1,4 @@
-# Glossary: KAI watch
+# Glossary: ESP32 Watch
 
 The words this project uses. One word per concept; where people say it more
 than one way, the runners-up sit under _Avoid_. Wherever a concept shows up —
@@ -143,6 +143,9 @@ There is no wake-word engine on either build, so the microphone stays open,
 every utterance is transcribed, and the phrase is looked for in the text —
 `WAKE` in `voice/turn.c` is a table because the transcriber has never been
 shown the name and spells it several ways. Whatever follows it is the first
-turn. On the watch this is a choice rather than a necessity: ESP-SR would hear
-it locally, but none of WakeNet's models is this name. _Avoid: wake word,
-hotword, trigger._
+turn. The phrase is configuration and the table is its default:
+`VOICE_WAKE_PHRASE` on the host and `CONFIG_KAI_WAKE_PHRASE` on the device
+hand `voice_wake_set()` a `|`-separated list, and an empty one means the
+table. On the watch the transcriber-as-wake-word is a choice rather than a
+necessity: ESP-SR would hear it locally, but none of WakeNet's models is this
+name. _Avoid: wake word, hotword, trigger._

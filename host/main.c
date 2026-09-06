@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * Host entry point for the KAI watch simulator.
+ * Host entry point for the ESP32 Watch simulator.
  *
  * This file is the whole host layer: SDL window, input devices, tick source
  * and the LVGL service loop. The firmware replaces this file and keeps ui.c
@@ -110,7 +110,7 @@ int main(void)
         SDL_Log("lv_sdl_window_create failed: %s", SDL_GetError());
         return 1;
     }
-    lv_sdl_window_set_title(display, "KAI watch simulator");
+    lv_sdl_window_set_title(display, "ESP32 Watch simulator");
 
     lv_sdl_mouse_create(); /* stands in for the capacitive touch panel */
     lv_sdl_keyboard_create();

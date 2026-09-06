@@ -5,7 +5,7 @@
 /*******************************************************************************
  * Size: 72 px
  * Bpp: 4
- * Opts: --font /Users/andygeiss/workspace/waveshare-watch/lvgl/scripts/built_in_font/Montserrat-Medium.ttf --range 0x2F-0x39 --size 72 --bpp 4 --no-compress --no-prefilter --no-kerning --format lvgl --lv-font-name ui_font_date_72 -o /Users/andygeiss/workspace/waveshare-watch/ui_font_date_72.c
+ * Opts: --font /Users/andygeiss/workspace/esp32-watch/lvgl/scripts/built_in_font/Montserrat-Medium.ttf --range 0x2F-0x39 --size 72 --bpp 4 --no-compress --no-prefilter --no-kerning --format lvgl --lv-font-name ui_font_date_72 -o /Users/andygeiss/workspace/esp32-watch/ui_font_date_72.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

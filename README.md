@@ -1,4 +1,4 @@
-# KAI watch
+# ESP32 Watch
 
 A retro clock face for the Waveshare ESP32-S3-Touch-AMOLED-2.06 whose hour and
 minute digits morph into the two eyes of an assistant. One UI, built two ways:
@@ -42,7 +42,8 @@ and the transcriber is the wake word: the watch listens for its own name, and
 everything after it is a turn. **Both builds do this** — the simulator through
 a Mac's microphone and a socket, the watch through its own ES7210 and ES8311 —
 and the words they listen for are one list in `voice/turn.c`, compiled into
-both.
+both. `Hey Kai` is the default; each side can be pointed at another name
+without touching that file.
 
 ## Why two builds
 
@@ -131,11 +132,12 @@ make flash
 ```
 
 WiFi, SNTP and the assistant are off until you configure them — `idf.py -C
-firmware menuconfig`, under **KAI watch**. The board has no RTC, so without an
+firmware menuconfig`, under **ESP32 Watch**. The board has no RTC, so without an
 SSID the clock counts from reset and the WiFi corner draws dim, which is the
 reading that dimming is for. The assistant needs that SSID, a speech server
 address on the same network, and `voices/kai.opus` in the tree when the
-firmware is built; without any one of them the watch is a clock.
+firmware is built; without any one of them the watch is a clock. The wake
+phrase is in the same menu, and empty there means `Hey Kai`.
 
 Neither target is part of `make check`: that gate has to stay runnable on a Mac
 with nothing on it but Homebrew.

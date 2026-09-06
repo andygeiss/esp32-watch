@@ -67,6 +67,11 @@
 #define VOICE_HOST "127.0.0.1"
 #define VOICE_PORT "8000"
 
+/* What the watch answers to, spellings separated by '|'. Empty is turn.c's
+ * own list, which is where the default is written down — see voice_wake_set().
+ * The device has the same setting under menuconfig. */
+#define VOICE_WAKE_PHRASE ""
+
 /* The voice KAI borrows, relative to the working directory — `make run`
  * starts the binary from the repository root. Both are gitignored: the clip
  * is a recording of a person, and this repository is licensed. */
@@ -538,6 +543,10 @@ static bool load_voice(void)
 void voice_start(void)
 {
     SDL_AudioSpec want, have;
+
+    if (!voice_wake_set(VOICE_WAKE_PHRASE)) {
+        SDL_Log("voice: that wake phrase does not fit — listening for the default");
+    }
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         SDL_Log("voice: no audio: %s", SDL_GetError());
