@@ -30,6 +30,7 @@ worth having: a layout that fits here fits on the device.
 | LVGL | **v9.4.0**, tag `c016f72`, checked out detached in `lvgl/` |
 | SDL2 | Homebrew `sdl2`, which now resolves to `sdl2-compat` 2.32.72 (SDL2 API over SDL3) |
 | CMake | 4.4.3 |
+| `lv_font_conv` | **1.5.3**, run through `npx`, and only to regenerate the digit font |
 
 `lvgl/` is gitignored. To restore it in a fresh clone:
 
@@ -41,7 +42,7 @@ exists**; moving to it is a deliberate decision with a re-check of the
 
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with five changes. It sits at
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with four changes. It sits at
 the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that root
 on the include path.
 
@@ -50,13 +51,12 @@ on the include path.
 | 15 | `#if 0` -> `#if 1` | **The file is inert without this, and it is the most common way to lose an hour here.** The template wraps its whole body in `#if 0`; leave it and LVGL silently compiles against built-in defaults, so every other setting below does nothing. Verify with `grep -c '^#if 1 /\* Set this' lv_conf.h` — must print `1`. |
 | 30 | `LV_COLOR_DEPTH 16` | The panel is RGB565. Already 16 in the v9.4 template; kept explicit so a template bump cannot change it silently. |
 | 72 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. The device has 8 MB PSRAM, so 512 KB is affordable there too. |
-| 626 | `LV_FONT_MONTSERRAT_48 1` | The clock digits use it. It is the largest Montserrat LVGL ships pre-generated, and built-in fonts are off by default. |
 | 1212 | `LV_USE_SDL 1` | Compiles LVGL's own SDL display and input backend — the host half of the simulator. The firmware build sets this back to `0`. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_48|LV_USE_SDL)\b' lv_conf.h
+    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_USE_SDL)\b' lv_conf.h
 
 ## The host / device boundary
 
@@ -114,11 +114,45 @@ Each of these was a real failure or a real warning, not a preference:
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
   unset — a plain `set()` of the same name gets cleared and the options stay on.
 
+## The digit font
+
+The clock digits are `ui_font_digits_130.c`: Montserrat Medium at 130 px,
+digits only, generated from the TTF that LVGL ships in
+`lvgl/scripts/built_in_font/`. It is checked in, so the build needs nothing
+extra; regenerate it only to change the size, which needs node because the
+converter comes from npm:
+
+    tools/gen_digit_font.py --size 130
+
+Two things about that font are deliberate:
+
+- **The digits are monospaced.** Montserrat's figures are proportional — at
+  130 px a `1` is 48 px wide where a `0` is 87 px — so a centred label shifts
+  sideways whenever a digit changes, and at this size the shift is impossible
+  to miss. `lv_font_conv` has no monospace switch, so the script rewrites
+  every glyph to the widest advance, 87 px, with its ink centred in that cell,
+  the way the digit cells of a VFD sit. `--no-kerning` belongs to the same
+  decision: a kern pair would pull a digit back out of its cell. A group of
+  two digits is therefore 174 px wide whatever the time is.
+- **It holds `0`-`9` and nothing else.** 31 KB of glyphs, and no glyph to fall
+  back on, so placeholder text in `ui.c` has to be digits as well.
+
+48 px is the largest Montserrat LVGL ships pre-generated, which is what kept
+the digits too small before. `LV_FONT_MONTSERRAT_48` is now `0` — nothing
+else uses it — and `LV_FONT_MONTSERRAT_14` stays on as `LV_FONT_DEFAULT`.
+
 ## Current UI
 
 `ui_build()` draws the clock face on the active screen: black background, amber
-`0xFFB000` digits in Montserrat 48, the hour group 70 px left of centre and the
-minute group 70 px right of it, refreshed by a 1 Hz `lv_timer`.
+`0xFFB000` digits in `ui_font_digits_130`, the hour group 102 px left of centre
+and the minute group 102 px right of it, refreshed by a 1 Hz `lv_timer`.
+
+That 102 px is derived, not chosen: the layout rule is a **16 px margin
+between a group's outer edge and the edge of the panel**, and with a 174 px
+group on a 410 px panel that puts each group's centre 102 px out, leaving
+30 px between the two groups. Change `UI_EDGE_MARGIN` and the offset follows.
+The margin is measured on the group box; the amber itself sits further in,
+by however much narrower than its 87 px cell the digit showing happens to be.
 
 The two digit groups are deliberately **separate objects placed symmetrically
 about the centre**, because they have to become the assistant's two eyes. Keep
