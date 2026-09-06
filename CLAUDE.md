@@ -189,10 +189,10 @@ centred below them, and a `Hey Kai` button 32 px off the bottom. One 1 Hz
 weekday bottom-left and the microphone bottom-right, in LVGL's built-in
 Montserrat 18 — the symbols ship inside the built-in fonts, so nothing had to
 be generated. A reading the platform does not have is **dimmed rather than
-hidden**: an empty corner reads as a bug, a dim one reads as "no". The
-weekday leaves with the clock; battery, WiFi and the microphone stay up in
-both views, because system state does not stop mattering while the assistant
-is listening. The values arrive through `ui_status_set()` — see the
+hidden**: an empty corner reads as a bug, a dim one reads as "no". All four
+stay up in both views — the corners are a status layer over the top of
+whichever face is showing, and state does not stop mattering while the
+assistant is listening. The values arrive through `ui_status_set()` — see the
 host/device boundary above.
 
 **Assistant.** The same two groups, now the assistant's two eyes: 120 px amber

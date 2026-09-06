@@ -170,7 +170,6 @@ static void view_set(ui_view_t next)
     fade(hours_label,   assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
     fade(minutes_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
     fade(date_label,    assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
-    fade(weekday_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
 
     for (i = 0; i < 2; i++) {
         fade(eyes[i], assistant ? LV_OPA_COVER : LV_OPA_TRANSP);
