@@ -6,7 +6,7 @@ BIN = build/kai_sim
 
 # Targets are alphabetical, so the default is named rather than first.
 .DEFAULT_GOAL = check
-.PHONY: build check ci clean run
+.PHONY: build check ci clean run test
 
 # CMake owns the dependency tracking. Re-running the configure step costs
 # nothing and is what makes a fresh clone build in one command.
@@ -25,6 +25,7 @@ check:
 	cmake --build build -j
 	clang -std=c11 -Wall -Wextra -Werror -DLV_CONF_INCLUDE_SIMPLE -I. -c ui.c -o build/ui-portable.o
 	! nm -u build/ui-portable.o | grep -i 'sdl\|esp_'
+	./build/kai_test
 
 # The same gates against the commit: a file never added, such as the generated
 # font, cannot make it green. Run before every push. lvgl/ is gitignored, so
@@ -41,3 +42,7 @@ clean:
 # Close the window to exit: LV_SDL_DIRECT_EXIT is 1.
 run: build
 	./$(BIN)
+
+# The inner loop: the last gate of check, without the rest of them.
+test: build
+	./build/kai_test

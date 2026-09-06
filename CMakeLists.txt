@@ -31,11 +31,19 @@ add_subdirectory(lvgl)
 # kai_sim — PUBLIC so the executable inherits it.
 target_link_libraries(lvgl PUBLIC PkgConfig::SDL2)
 
-add_executable(kai_sim
-    main.c
+# The portable half as its own target, which is the host/device boundary from
+# CLAUDE.md written into the build: two hosts link it here — the SDL window and
+# the headless test — and the firmware will build the same sources unchanged.
+add_library(kai_ui STATIC
     ui.c
     ui_font_digits_118.c  # generated, see tools/gen_fonts.py
     ui_font_date_94.c
 )
+target_link_libraries(kai_ui PUBLIC lvgl)
 
-target_link_libraries(kai_sim PRIVATE lvgl PkgConfig::SDL2)
+add_executable(kai_sim main.c)
+target_link_libraries(kai_sim PRIVATE kai_ui PkgConfig::SDL2)
+
+# Renders the UI into a byte array and checks what came out. `make test`.
+add_executable(kai_test test_ui.c)
+target_link_libraries(kai_test PRIVATE kai_ui PkgConfig::SDL2)

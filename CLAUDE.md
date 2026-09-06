@@ -96,17 +96,17 @@ word, so it always false-positives.
     make run
 
 `make` on its own is `make check`: the `lv_conf.h` liveness grep above, the
-build, and the boundary check below, in that order. `make ci` runs those same
-gates against the commit, which is what catches a file that was never added —
-it symlinks this checkout's `lvgl/` into the copy, since a gitignored
-directory is never in the archive. `make clean` removes `build/`.
+build, the boundary check below, and `test_ui.c`, in that order. `make test`
+runs that last gate alone, for the inner loop. `make ci` runs all of them
+against the commit, which is what catches a file that was never added — it
+symlinks this checkout's `lvgl/` into the copy, since a gitignored directory
+is never in the archive. `make clean` removes `build/`.
 
 The Makefile is the baseline's (`stack/makefile.md`) with CMake in place of
-the Go toolchain, minus three things this project has no work for: `fmt` (no
-formatter is set up, and picking one now would reflow every hand-laid line),
-`test` (no suite yet — the headless render at the bottom of this file is the
-closest thing) and the `.env` line in `run` (the simulator reads no
-configuration). Underneath it is only:
+the Go toolchain, minus two things this project has no work for: `fmt` (no
+formatter is set up, and picking one now would reflow every hand-laid line)
+and the `.env` line in `run` (the simulator reads no configuration).
+Underneath it is only:
 
     cmake -S . -B build
     cmake --build build -j
@@ -134,6 +134,9 @@ Each of these was a real failure or a real warning, not a preference:
 - SDL2 is found with `pkg_check_modules(... IMPORTED_TARGET sdl2)` rather than
   `find_package(SDL2)`; pkg-config follows the Homebrew arm64 prefix with no
   hand-written hint paths.
+- The portable half is its own target, `kai_ui`. Two hosts link it — `kai_sim`
+  with its SDL window, `kai_test` with a byte array — which is the host/device
+  boundary above, put where the build can hold it up.
 - `CONFIG_LV_BUILD_EXAMPLES`, `CONFIG_LV_BUILD_DEMOS` and
   `CONFIG_LV_USE_THORVG_INTERNAL` are `FORCE`d **cache** entries. LVGL declares
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
@@ -234,16 +237,25 @@ it and the microphone starts 44 px past it.
 
 `screencapture` and `osascript` need Screen Recording and Accessibility
 permission for the terminal, which is not granted here, so window screenshots
-fail with `could not create image from display`. To check pixels instead,
-render `ui.c` headlessly: create a display with
-`LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, call `ui_build()`,
-pump `lv_timer_handler()`, then `lv_refr_now()` and dump the buffer.
+fail with `could not create image from display`. `test_ui.c` is the way round
+it, and `make test` runs it: it creates a display with
+`LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
+`ui_build()`, steps a fake tick source, clicks the button through
+`lv_obj_send_event()`, and checks geometry, opacity, label text and the pixels
+themselves. 59 checks. Three of them have been made to fail on purpose:
+fading the weekday out with the clock, putting the edge margin back to 16, and
+letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`. Do that to any check you add —
+a check that has never failed is a check you have not tested.
 
-To watch the morph you need more than one frame, and then the display also
-needs a flush callback that calls `lv_display_flush_ready()`. Without one the
-first refresh leaves the display marked as flushing and the second spins in
-`wait_for_flushing` forever — a silent hang, since `LV_USE_LOG` is off. Step a
-fake tick source rather than the wall clock, so a frame can be taken part-way
-through the 400 ms animation. Amber
-`0xFFB000` reads back as `#FFB200` after the RGB565 round-trip — that is
-correct, not a bug.
+Two things to know before writing another renderer like it:
+
+- **The display needs a flush callback** that calls `lv_display_flush_ready()`.
+  Without one the first refresh leaves the display marked as flushing and the
+  second spins in `wait_for_flushing` forever — a silent hang, because
+  `LV_USE_LOG` is off.
+- **Step a fake tick source**, not the wall clock. It is what makes a 400 ms
+  morph and a 3.6 s blink pause cost nothing, and it is why the test can look
+  at a frame part-way through an animation.
+
+Amber `0xFFB000` reads back as `#FFB200` after the RGB565 round-trip — that is
+correct, not a bug, and the test asserts exactly that value.
