@@ -2,3 +2,10 @@ build/
 lvgl/
 compile_commands.json
 .DS_Store
+
+# ESP-IDF: build output, the downloaded driver components, and the generated
+# sdkconfig. dependencies.lock is checked in — it is what pins them.
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old

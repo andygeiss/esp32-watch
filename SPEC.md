@@ -9,7 +9,9 @@ building the watch face.
 
 **Guardrails.**
 
-- No libraries beyond LVGL and SDL2.
+- No libraries in the simulator beyond LVGL and SDL2. On the device,
+  ESP-IDF plus the two drivers for this board's panel and touch
+  controller, and nothing else.
 - LVGL stays pinned to a release tag. Never `master`.
 - `ui.c` / `ui.h` must not reference SDL or ESP-IDF; they compile unchanged into
   the firmware.
@@ -26,3 +28,19 @@ building the watch face.
   their reasons, the build and run commands, the host/device boundary rule and
   the panel specification.
 - The tree is a git repository with `build/` and `lvgl/` ignored.
+
+# The firmware
+
+**Job.** Run the same `ui.c` on the board it was drawn for.
+
+**Why.** The simulator is only worth having if what it shows is what the panel
+shows. A port that diverges — a second LVGL, a second `lv_conf.h`, a second
+layout — turns the fast loop back into guesswork.
+
+**Done means.**
+
+- `make firmware` builds `firmware/` against the repo root's own `lvgl/` and
+  `lv_conf.h`, with `ui.c` and the three fonts compiled from where they sit.
+- The panel, the touch and the platform readouts reach the UI only through
+  `ui_build()` and `ui_status_set()`.
+- `make check` still passes on a machine with no ESP-IDF on it.

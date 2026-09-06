@@ -1,0 +1,28 @@
+menu "KAI watch"
+
+    config KAI_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Leave this empty and the radio never comes up: the watch runs off
+            its own boot clock and the WiFi corner readout stays dim, which is
+            what that dimming is for. Fill it in and the watch joins the
+            network and asks SNTP what time it is.
+
+    config KAI_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+
+    config KAI_SNTP_SERVER
+        string "SNTP server"
+        default "pool.ntp.org"
+
+    config KAI_TIMEZONE
+        string "POSIX TZ string"
+        default "CET-1CEST,M3.5.0,M10.5.0/3"
+        help
+            SNTP hands out UTC and the device has no locale to convert it
+            with, so the zone is compiled in. The default is central Europe
+            with EU daylight saving.
+
+endmenu

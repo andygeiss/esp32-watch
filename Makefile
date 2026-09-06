@@ -6,7 +6,7 @@ BIN = build/kai_sim
 
 # Targets are alphabetical, so the default is named rather than first.
 .DEFAULT_GOAL = check
-.PHONY: build check ci clean run test
+.PHONY: build check ci clean firmware flash run test
 
 # CMake owns the dependency tracking. Re-running the configure step costs
 # nothing and is what makes a fresh clone build in one command.
@@ -38,6 +38,16 @@ ci:
 
 clean:
 	rm -rf build/
+
+# The firmware, for the board itself. Needs ESP-IDF exported into the shell
+# first (. ~/esp/esp-idf/export.sh). Deliberately not part of check: that has
+# to stay runnable on a Mac with nothing on it but Homebrew.
+firmware:
+	idf.py -C firmware build
+
+# The firmware onto the board, then its log. Ctrl-] leaves the monitor.
+flash:
+	idf.py -C firmware flash monitor
 
 # Close the window to exit: LV_SDL_DIRECT_EXIT is 1.
 run: build

@@ -40,7 +40,15 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+/* The 512 kB pool below cannot be a static array on the device: the ESP32-S3
+ * has 512 kB of internal SRAM in total. So the firmware allocates through the
+ * C library, which CONFIG_SPIRAM_USE_MALLOC points at the 8 MB of PSRAM.
+ * ESP_PLATFORM is defined by every ESP-IDF compile and by nothing else. */
+#ifdef ESP_PLATFORM
+    #define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+#else
+    #define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+#endif
 
 /** Possible values
  * - LV_STDLIB_BUILTIN:     LVGL's built in implementation
@@ -1209,7 +1217,13 @@
  *==================*/
 
 /** Use SDL to open window on PC and handle mouse and keyboard. */
-#define LV_USE_SDL              1
+/* The host half of the simulator. There is no SDL on the device, and LVGL's
+ * SDL sources would not compile there. */
+#ifdef ESP_PLATFORM
+    #define LV_USE_SDL          0
+#else
+    #define LV_USE_SDL          1
+#endif
 #if LV_USE_SDL
     #define LV_SDL_INCLUDE_PATH     <SDL2/SDL.h>
     #define LV_SDL_RENDER_MODE      LV_DISPLAY_RENDER_MODE_DIRECT   /**< LV_DISPLAY_RENDER_MODE_DIRECT is recommended for best performance */

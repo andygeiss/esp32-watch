@@ -1,0 +1,7 @@
+# The app alone is over 1 MB with LVGL, the three generated fonts and WiFi in
+# it, so the default single-factory table does not fit. 4 MB is room to grow
+# into out of the 32 MB the board has.
+# Name,     Type, SubType, Offset,  Size
+nvs,        data, nvs,     0x9000,  0x6000
+phy_init,   data, phy,     0xf000,  0x1000
+factory,    app,  factory, 0x10000, 4M

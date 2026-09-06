@@ -1,0 +1,37 @@
+# The board: ESP32-S3R8 on a Waveshare ESP32-S3-Touch-AMOLED-2.06.
+CONFIG_IDF_TARGET="esp32s3"
+
+# 8 MB of octal PSRAM. LVGL's heap is the C library's here (see lv_conf.h) and
+# its objects and draw buffers are far more than the 512 kB of internal SRAM
+# holds, so malloc has to be able to reach across.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# 32 MB of flash. The default table gives the app 1 MB, which LVGL, its fonts
+# and the WiFi stack do not fit in, hence partitions.csv.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Read the repo root's lv_conf.h — the same file the simulator builds against.
+# This is the firmware's version of the liveness grep in `make check`: left at
+# its default (y) LVGL ignores that file entirely and takes its settings from
+# menuconfig instead, and the two halves of the project silently drift apart.
+CONFIG_LV_CONF_SKIP=n
+
+# LVGL's bundled examples and demos, which default to on under ESP-IDF. The
+# host CMakeLists.txt turns the same two off for the same reason: nothing here
+# builds them, and they are minutes of compile per build.
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
+
+# The LVGL loop runs in app_main, the way the simulator's runs in main(). The
+# default 3584-byte main task is not enough to render from.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# So that the loop's 1 ms floor is 1 ms and not a 10 ms tick.
+CONFIG_FREERTOS_HZ=1000

@@ -1,10 +1,11 @@
-# KAI watch — host simulator
+# KAI watch
 
-An LVGL simulator that runs the watch UI on macOS, so the interface can be
-built and seen without flashing hardware. The long-term goal is a retro clock
-face whose hour and minute digits morph into the two eyes of an assistant
-face — that morph is the point of the project, so nothing here may foreclose
-it.
+Two builds of one watch UI. An LVGL simulator that runs it on macOS at the
+exact panel size, so the interface can be built and seen without flashing
+hardware, and the ESP-IDF firmware that runs the same files on the board. The
+long-term goal is a retro clock face whose hour and minute digits morph into
+the two eyes of an assistant face — that morph is the point of the project, so
+nothing here may foreclose it.
 
 Read `SPEC.md` for the job, guardrails and definition of done.
 
@@ -31,6 +32,9 @@ worth having: a layout that fits here fits on the device.
 | SDL2 | Homebrew `sdl2`, which now resolves to `sdl2-compat` 2.32.72 (SDL2 API over SDL3) |
 | CMake | 4.4.3 |
 | `lv_font_conv` | **1.5.3**, run through `npx`, and only to regenerate the digit font |
+| ESP-IDF | **v5.5**, shallow clone at `~/esp/esp-idf` |
+| `waveshare/esp_lcd_sh8601` | **2.0.0** — the panel controller |
+| `espressif/esp_lcd_touch_ft5x06` | **1.1.1**, over `espressif/esp_lcd_touch` **1.2.1** — the touch controller |
 
 `lvgl/` is gitignored. To restore it in a fresh clone:
 
@@ -40,36 +44,56 @@ LVGL MUST stay on a release tag and MUST NOT track `master`. Upstream **v9.5.0
 exists**; moving to it is a deliberate decision with a re-check of the
 `lv_conf.h` line numbers below, not a default.
 
+The three driver components land in `firmware/managed_components/`, which is
+gitignored; `firmware/dependencies.lock` is checked in and is what pins them.
+ESP-IDF itself lives outside the tree:
+
+    git clone --depth 1 --shallow-submodules --recursive -b v5.5 \
+        https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+    ~/esp/esp-idf/install.sh esp32s3
+
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with seven changes. It sits at
-the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that root
-on the include path.
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with eight changes. It sits
+at the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that
+root on the include path — in the host build because `CMakeLists.txt` sets both
+before `add_subdirectory(lvgl)`, in the firmware because LVGL's own
+`env_support/cmake/esp.cmake` does the same thing for `${LVGL_ROOT_DIR}/..`,
+which is that root.
+
+**One file serves both targets.** The two settings that cannot be the same on a
+Mac and on the board switch on `ESP_PLATFORM`, which every ESP-IDF compile
+defines and nothing else does. A second `lv_conf.h` would be a second layout.
 
 | Line | Setting | Why it matters |
 |---|---|---|
 | 15 | `#if 0` -> `#if 1` | **The file is inert without this, and it is the most common way to lose an hour here.** The template wraps its whole body in `#if 0`; leave it and LVGL silently compiles against built-in defaults, so every other setting below does nothing. Verify with `grep -c '^#if 1 /\* Set this' lv_conf.h` — must print `1`. |
 | 30 | `LV_COLOR_DEPTH 16` | The panel is RGB565. Already 16 in the v9.4 template; kept explicit so a template bump cannot change it silently. |
-| 72 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. The device has 8 MB PSRAM, so 512 KB is affordable there too. |
-| 611 | `LV_FONT_MONTSERRAT_18 1` | The corner readouts, and the WiFi and battery symbols, which LVGL compiles into its built-in fonts. |
-| 618 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
-| 622 | `LV_FONT_MONTSERRAT_40 1` | The weekday under the date. It is letters, which none of the generated fonts here hold. |
-| 1212 | `LV_USE_SDL 1` | Compiles LVGL's own SDL display and input backend — the host half of the simulator. The firmware build sets this back to `0`. |
+| 47 | `LV_USE_STDLIB_MALLOC` under `ESP_PLATFORM` | `LV_STDLIB_CLIB` on the device, `LV_STDLIB_BUILTIN` on the host. The built-in allocator's pool is a static array, and the 512 KB below is the whole of the ESP32-S3's internal SRAM. On the device LVGL allocates through the C library, which `CONFIG_SPIRAM_USE_MALLOC` points at the 8 MB of PSRAM. |
+| 80 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. Host only — the line above takes the device off this allocator. |
+| 619 | `LV_FONT_MONTSERRAT_18 1` | The corner readouts, and the WiFi and battery symbols, which LVGL compiles into its built-in fonts. |
+| 626 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
+| 630 | `LV_FONT_MONTSERRAT_40 1` | The weekday under the date. It is letters, which none of the generated fonts here hold. |
+| 1222 | `LV_USE_SDL` under `ESP_PLATFORM` | `1` on the host, which compiles LVGL's own SDL display and input backend — the host half of the simulator. `0` on the device, where there is no SDL and those sources would not compile. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_(18|32|40)|LV_USE_SDL)\b' lv_conf.h
+    grep -n -E '^\s*#(define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_USE_STDLIB_MALLOC|LV_FONT_MONTSERRAT_(18|32|40)|LV_USE_SDL)\b|ifdef ESP_PLATFORM)' lv_conf.h
 
 ## The host / device boundary
 
 This is the rule that matters most as the code grows.
 
-- **`ui.c` / `ui.h` — portable.** LVGL and the C standard library only. No SDL,
-  no ESP-IDF, no `driver/` headers. This is compiled *unchanged* into the
-  firmware.
+- **`ui.c` / `ui.h` and the three fonts — portable.** LVGL and the C standard
+  library only. No SDL, no ESP-IDF, no `driver/` headers. Both builds compile
+  these files *unchanged*, from where they sit at the repo root.
 - **`main.c` — host only.** SDL window, input devices, tick source, service
-  loop. The firmware replaces this file wholesale.
+  loop.
+- **`firmware/main/` — device only.** The same four jobs against the panel,
+  plus the clock the board cannot read for itself, split over `main.c`,
+  `board.c` and `net.c`. It replaces the root `main.c` rather than adding to
+  it.
 
 New code goes on the portable side unless it genuinely needs the host; decide
 which side a new file is on before writing it.
@@ -77,11 +101,12 @@ which side a new file is on before writing it.
 A fact the UI needs but cannot reach for itself — the battery, the radio —
 crosses in the other direction, through a struct and a setter in `ui.h`
 (`ui_status_t`, `ui_status_set()`). The host fills it with a fake, the
-firmware will fill it from the hardware, and `ui.c` never learns which. That
-is the pattern for the next one too.
+firmware fills it from the hardware, and `ui.c` never learns which. That is the
+pattern for the next one too.
 
-The check that settles it is the symbol list — compile the portable side alone
-and look at what it leaves undefined. Anything but `lv_*` and libc is a leak:
+Two checks settle it, one on each side. The host's is the symbol list — compile
+the portable side alone and look at what it leaves undefined. Anything but
+`lv_*` and libc is a leak:
 
     clang -std=c11 -DLV_CONF_INCLUDE_SIMPLE -I. -c ui.c -o /tmp/ui.o
     nm -u /tmp/ui.o | grep -i 'sdl\|esp_'    # must print nothing
@@ -91,6 +116,10 @@ compile. Today that list is `lv_*` plus `time` and `localtime_r`, and nothing
 else. Do
 not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
+
+The firmware's is the build itself: `firmware/components/kai_ui/` compiles the
+same four files and `REQUIRES lvgl` and nothing else, so an ESP-IDF header in
+`ui.c` is not on its include path and the build stops.
 
 ## Build and run
 
@@ -121,6 +150,15 @@ an x86 install and is wrong for this machine):
 
     brew install cmake pkg-config sdl2
 
+For the board, with ESP-IDF exported into the shell first:
+
+    . ~/esp/esp-idf/export.sh
+    make firmware   # idf.py -C firmware build
+    make flash      # idf.py -C firmware flash monitor
+
+Neither is part of `check`. That gate has to stay runnable on a Mac with
+nothing on it but Homebrew, and it is the one that runs before every commit.
+
 ### Why CMakeLists.txt is shaped the way it is
 
 Each of these was a real failure or a real warning, not a preference:
@@ -142,6 +180,101 @@ Each of these was a real failure or a real warning, not a preference:
   `CONFIG_LV_USE_THORVG_INTERNAL` are `FORCE`d **cache** entries. LVGL declares
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
   unset — a plain `set()` of the same name gets cleared and the options stay on.
+
+## The firmware
+
+`firmware/` is the ESP-IDF project. Three files of its own, and everything
+else shared with the simulator:
+
+| | |
+|---|---|
+| `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`. The counterpart of the root `main.c`, and deliberately the same shape |
+| `firmware/main/board.c` | the QSPI panel and the touch controller, handed to LVGL |
+| `firmware/main/net.c` | WiFi and SNTP, both off unless an SSID is configured |
+| `firmware/components/kai_ui/` | a `CMakeLists.txt` and nothing else: it compiles `ui.c` and the three fonts from the repo root |
+
+**`lvgl/` is the same checkout, not a second one.** `firmware/CMakeLists.txt`
+puts the repo root's `lvgl/` on `EXTRA_COMPONENT_DIRS` rather than letting the
+component manager fetch `lvgl/lvgl`, so the two halves cannot end up on
+different LVGL versions. It is also what finds `lv_conf.h` — see that section
+above.
+
+**The link is the `lv_conf.h` liveness check on this side.** `CONFIG_LV_CONF_SKIP`
+defaults to `y`, which makes LVGL ignore `lv_conf.h` entirely and take its
+settings from menuconfig — the firmware's version of the `#if 0` trap at the
+top of that file, and just as quiet. `sdkconfig.defaults` sets it to `n`. If it
+ever goes back, LVGL's Kconfig defaults leave `LV_FONT_MONTSERRAT_32` and `_40`
+off, `ui.c` names both, and the build fails at the link instead of booting to a
+face with no letters on it.
+
+### The panel
+
+Every pin number, the vendor power-on sequence and the column offset in
+`board.c` are transcribed from Waveshare's own BSP for this board
+(`waveshare/esp32_s3_touch_amoled_2_06` 2.0.0 in the ESP component registry).
+They describe one specific piece of hardware and cannot be derived from
+anything, so they are copied rather than worked out. That BSP is not a
+dependency — it would drag in `esp_lvgl_port`, an audio codec and an LVGL of
+its own — only the two driver components underneath it are.
+
+Three things about the panel are not obvious and all three are load-bearing:
+
+- **It reads RGB565 big-endian.** LVGL renders little-endian, so `flush()`
+  runs `lv_draw_sw_rgb565_swap()` over the strip before handing it to DMA.
+- **It addresses its frame memory in pairs of pixels**, so a dirty area with an
+  odd edge has to grow out to the next even one — the `LV_EVENT_INVALIDATE_AREA`
+  handler. It also settles the strip height: LVGL calls that same handler from
+  `get_max_row()` with a trial area and shrinks until the rounded height fits
+  the buffer, so no strip boundary can land back on an odd row.
+- **Column 0 of the glass is column 22 of the controller**, hence
+  `esp_lcd_panel_set_gap(panel, 22, 0)`.
+
+Two draw buffers of 410 x 50 px, 41 kB each, in internal DMA-capable RAM, so
+LVGL renders the next strip while the last one is still going out. The link
+leaves about 266 kB of internal RAM free, so they and the WiFi stack fit with
+room over.
+
+### The heap
+
+`LV_MEM_SIZE` is 512 kB and the ESP32-S3 has 512 kB of internal SRAM in total,
+so the built-in allocator's static pool cannot exist on the device. `lv_conf.h`
+switches `LV_USE_STDLIB_MALLOC` to `LV_STDLIB_CLIB` under `ESP_PLATFORM`, and
+`CONFIG_SPIRAM_USE_MALLOC` points the C library's `malloc` at the 8 MB of
+PSRAM.
+
+### One task
+
+Everything that touches LVGL runs in `app_main`'s loop — the timers, the touch
+read, the status refresh — so there is no lock to take and none to forget.
+`CONFIG_ESP_MAIN_TASK_STACK_SIZE` is 8192 because the default 3584 is not
+enough to render from, and `CONFIG_FREERTOS_HZ` is 1000 so the loop's 1 ms
+floor really is 1 ms.
+
+`net.c` is the one thing outside that task, and all it ever does is set a flag
+the loop reads.
+
+### What the device can answer
+
+The same `ui_status_t` the simulator fakes, filled from what is actually there:
+
+| | |
+|---|---|
+| `wifi_up` | real, from the station's `IP_EVENT_STA_GOT_IP` |
+| `battery_pct` | `-1`. There is no fuel gauge on this board, and the UI already draws `--%` for a charge it does not know — the honest reading, not an invented one |
+| `listening`, `speaking` | `false` until there is an audio path behind them: the ES8311 codec and a wake-word engine |
+
+Each is one line in `status_tick()` when it arrives, and none of it reaches
+into `ui.c`. That is the point of the struct.
+
+### The clock
+
+The board has no RTC, so `time(NULL)` counts from reset until something tells
+it otherwise, and SNTP over WiFi is the only thing on this board that can.
+Both are off by default. `idf.py -C firmware menuconfig`, under **KAI watch**:
+an empty SSID keeps the radio down, the watch runs off its boot clock, and the
+WiFi corner draws dim — which is the reading that dimming is for. The timezone
+is compiled in there too, because the device has no locale to turn UTC into
+local time with.
 
 ## The fonts
 
@@ -262,7 +395,7 @@ it, and `make test` runs it: it creates a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
 `ui_build()`, steps a fake tick source, clicks the button through
 `lv_obj_send_event()`, and checks geometry, opacity, label text and the pixels
-themselves. 59 checks. Three of them have been made to fail on purpose:
+themselves. 74 checks. Three of them have been made to fail on purpose:
 fading a corner readout out with the clock, putting the edge margin back to
 16, and letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`. Do that to any check you add —
 a check that has never failed is a check you have not tested.
