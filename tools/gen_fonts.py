@@ -112,7 +112,7 @@ def tabular(source):
 
 
 def generate(size, source_font, unicode_range, name):
-    out = ROOT / "{}.c".format(name)
+    out = ROOT / "ui" / "{}.c".format(name)
 
     # --no-kerning: tabular figures must not have pairs nudging digits back out
     # of their cells. --no-compress keeps the glyphs a plain byte array.

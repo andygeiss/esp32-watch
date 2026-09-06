@@ -23,7 +23,7 @@ check:
 	test "$$(grep -c '^#if 1 /\* Set this' lv_conf.h)" = 1
 	cmake -S . -B build
 	cmake --build build -j
-	clang -std=c11 -Wall -Wextra -Werror -DLV_CONF_INCLUDE_SIMPLE -I. -c ui.c -o build/ui-portable.o
+	clang -std=c11 -Wall -Wextra -Werror -DLV_CONF_INCLUDE_SIMPLE -I. -c ui/ui.c -o build/ui-portable.o
 	! nm -u build/ui-portable.o | grep -i 'sdl\|esp_'
 	./build/kai_test
 

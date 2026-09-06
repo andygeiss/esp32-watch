@@ -87,19 +87,30 @@ after any LVGL bump:
 
 This is the rule that matters most as the code grows.
 
-- **`ui.c` / `ui.h` and the three fonts — portable.** LVGL and the C standard
-  library only. No SDL, no ESP-IDF, no `driver/` headers. Both builds compile
-  these files *unchanged*, from where they sit at the repo root.
-- **`main.c` and `voice.c` — host only.** The SDL window, input devices, tick
-  source and service loop; and the microphone, the two speech services and the
-  speaker.
+**The directory a file is in is which side of the boundary it is on.** That is
+the whole reason for the layout, and it is why there is no `src/`: one folder
+called "the source" would put the first two of these in the same bag and say
+nothing.
+
+- **`ui/` — portable.** `ui.c`, `ui.h` and the three fonts. LVGL and the C
+  standard library only. No SDL, no ESP-IDF, no `driver/` headers. Both builds
+  compile these files *unchanged*, from where they sit.
+- **`host/` — host only.** `main.c` for the SDL window, input devices, tick
+  source and service loop; `voice.c` for the microphone, the two speech
+  services and the speaker; `test_ui.c` for the headless renderer.
 - **`firmware/main/` — device only.** The same four jobs against the panel,
   plus the clock the board cannot read for itself, split over `main.c`,
-  `board.c` and `net.c`. It replaces the root `main.c` rather than adding to
-  it.
+  `board.c` and `net.c`. It replaces `host/main.c` rather than adding to it.
 
-New code goes on the portable side unless it genuinely needs the host; decide
-which side a new file is on before writing it.
+`lv_conf.h` and `lvgl/` stay at the root and cannot follow the sources into
+`ui/`. LVGL's own `env_support/cmake/esp.cmake` registers `${LVGL_ROOT_DIR}/..`
+as the place to find `lv_conf.h`, so it has to sit beside `lvgl/` — see the
+`lv_conf.h` section above. The root stays on the include path for that reason
+alone, which is also what resolves `ui/ui.c`'s own `"lvgl/lvgl.h"`.
+
+New code goes in `ui/` unless it genuinely needs the host; decide which
+directory a new file is in before writing it, because that is the same
+decision.
 
 A fact the UI needs but cannot reach for itself — the battery, the radio, the
 microphone — crosses in the other direction, through a struct and a setter in
@@ -119,7 +130,7 @@ Two checks settle it, one on each side. The host's is the symbol list — compil
 the portable side alone and look at what it leaves undefined. Anything but
 `lv_*` and libc is a leak:
 
-    clang -std=c11 -DLV_CONF_INCLUDE_SIMPLE -I. -c ui.c -o /tmp/ui.o
+    clang -std=c11 -DLV_CONF_INCLUDE_SIMPLE -I. -c ui/ui.c -o /tmp/ui.o
     nm -u /tmp/ui.o | grep -i 'sdl\|esp_'    # must print nothing
 
 `make check` runs exactly this, plus `-Wall -Wextra -Werror` on the same
@@ -130,8 +141,10 @@ not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
 
 The firmware's is the build itself: `firmware/components/kai_ui/` compiles the
-same four files and `REQUIRES lvgl` and nothing else, so an ESP-IDF header in
-`ui.c` is not on its include path and the build stops.
+same four files out of `ui/` and `REQUIRES lvgl` and nothing else, so an
+ESP-IDF header in `ui.c` is not on its include path and the build stops. It
+never names `host/` at all, which is the same rule stated as a directory it
+cannot reach.
 
 ## Build and run
 
@@ -205,10 +218,10 @@ else shared with the simulator:
 
 | | |
 |---|---|
-| `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`. The counterpart of the root `main.c`, and deliberately the same shape |
+| `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`. The counterpart of `host/main.c`, and deliberately the same shape |
 | `firmware/main/board.c` | the QSPI panel and the touch controller, handed to LVGL |
 | `firmware/main/net.c` | WiFi and SNTP, both off unless an SSID is configured |
-| `firmware/components/kai_ui/` | a `CMakeLists.txt` and nothing else: it compiles `ui.c` and the three fonts from the repo root |
+| `firmware/components/kai_ui/` | a `CMakeLists.txt` and nothing else: it compiles `ui.c` and the three fonts out of the repo's `ui/` |
 
 **`lvgl/` is the same checkout, not a second one.** `firmware/CMakeLists.txt`
 puts the repo root's `lvgl/` on `EXTRA_COMPONENT_DIRS` rather than letting the
@@ -327,8 +340,9 @@ Three things about them are deliberate:
   `ui.c` has to be made of characters the font actually has.
 
 Changing a size touches four places: `tools/gen_fonts.py`, the file name in
-`CMakeLists.txt`, and in `ui.c` the font name and the cell and line-height
-constants the layout is derived from.
+both `CMakeLists.txt` files, and in `ui.c` the font name and the cell and
+line-height constants the layout is derived from. The generated files land in
+`ui/`, beside the code that names them.
 
 The button is the exception: its label is letters, so it uses LVGL's built-in
 `lv_font_montserrat_32`.
@@ -405,8 +419,8 @@ it and the microphone starts 51 px past it.
 
 ## The voice loop
 
-`voice.c` is the simulator's audio path, and the reason the microphone and
-speaker corners are no longer faked. It is host-only, like `main.c`: the board
+`host/voice.c` is the simulator's audio path, and the reason the microphone
+and speaker corners are no longer faked. It is host-only, like `main.c`: the board
 has no codec wired up and no wake word yet, so the Mac's own microphone and
 speakers do the job the ES8311 will do later.
 
@@ -472,7 +486,8 @@ takes **2.6-3.3 s** to produce 3 s of it — roughly real time, which is the
 number the chunker exists to hide once there is a model writing the reply.
 
 None of it is in `check`. The gate has to stay runnable on a Mac with nothing
-on it, so `kai_test` never links `voice.c`, and the loop itself needs no
+on it, so `kai_test` never links `voice.c` — and `ui/` cannot reach it at
+all, and the loop itself needs no
 configuration: the endpoint and both model names are `#define`s at the top of
 the file.
 

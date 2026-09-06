@@ -1,5 +1,6 @@
-# The portable half, compiled from the repo root unchanged: the same four files
-# the simulator's kai_ui target builds, from the same paths.
+# The portable half, compiled from ui/ unchanged: the same four files the
+# simulator's kai_ui target builds, from the same paths. Nothing in host/ is
+# reachable from here, and that is the boundary rule as a directory listing.
 #
 # REQUIRES lvgl and nothing else, which is the host/device boundary from
 # CLAUDE.md written into the firmware build. An ESP-IDF header in ui.c would
@@ -9,9 +10,9 @@
 get_filename_component(KAI_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
 idf_component_register(
-    SRCS "${KAI_ROOT}/ui.c"
-         "${KAI_ROOT}/ui_font_digits_118.c"  # generated, see tools/gen_fonts.py
-         "${KAI_ROOT}/ui_font_date_72.c"
-         "${KAI_ROOT}/ui_font_assistant_18.c"
-    INCLUDE_DIRS "${KAI_ROOT}"
+    SRCS "${KAI_ROOT}/ui/ui.c"
+         "${KAI_ROOT}/ui/ui_font_digits_118.c"  # generated, see tools/gen_fonts.py
+         "${KAI_ROOT}/ui/ui_font_date_72.c"
+         "${KAI_ROOT}/ui/ui_font_assistant_18.c"
+    INCLUDE_DIRS "${KAI_ROOT}/ui"
     REQUIRES lvgl)

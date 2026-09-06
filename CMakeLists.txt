@@ -8,6 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # lv_conf.h sits at the project root and LVGL's own sources include it too,
 # so both the define and the include path must be in place before
 # add_subdirectory(lvgl) — otherwise LVGL compiles against its defaults.
+#
+# The root stays on the include path even though no source lives there any
+# more: it is what resolves lv_conf.h, and what makes ui/ui.c's own
+# "lvgl/lvgl.h" reachable from a subdirectory. lv_conf.h cannot follow the
+# sources into ui/ — LVGL's esp.cmake registers the parent of lvgl/ as the
+# place to find it, so it has to stay beside lvgl/.
 add_compile_definitions(LV_CONF_INCLUDE_SIMPLE)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -33,22 +39,28 @@ target_link_libraries(lvgl PUBLIC PkgConfig::SDL2)
 
 # The portable half as its own target, which is the host/device boundary from
 # CLAUDE.md written into the build: two hosts link it here — the SDL window and
-# the headless test — and the firmware will build the same sources unchanged.
+# the headless test — and the firmware builds the same sources unchanged. The
+# directories say the same thing the targets do: ui/ compiles on both sides,
+# host/ only here.
 add_library(kai_ui STATIC
-    ui.c
-    ui_font_digits_118.c  # generated, see tools/gen_fonts.py
-    ui_font_date_72.c
-    ui_font_assistant_18.c
+    ui/ui.c
+    ui/ui_font_digits_118.c  # generated, see tools/gen_fonts.py
+    ui/ui_font_date_72.c
+    ui/ui_font_assistant_18.c
 )
 target_link_libraries(kai_ui PUBLIC lvgl)
+
+# PUBLIC, so both hosts find ui.h without knowing where it lives. It is the
+# only thing they may reach into ui/ for.
+target_include_directories(kai_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ui)
 
 # voice.c is host-only, like main.c: it is the microphone, the two speech
 # services and the speaker. Deliberately not in kai_ui and not in kai_test —
 # the boundary check compiles the portable half alone, and `make test` has to
 # pass with no oMLX server and no audio device anywhere near it.
-add_executable(kai_sim main.c voice.c)
+add_executable(kai_sim host/main.c host/voice.c)
 target_link_libraries(kai_sim PRIVATE kai_ui PkgConfig::SDL2)
 
 # Renders the UI into a byte array and checks what came out. `make test`.
-add_executable(kai_test test_ui.c)
+add_executable(kai_test host/test_ui.c)
 target_link_libraries(kai_test PRIVATE kai_ui PkgConfig::SDL2)

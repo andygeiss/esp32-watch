@@ -29,8 +29,8 @@ along the bottom. All four stay up in both views — they are a status layer ove
 whichever face is showing. _Avoid: badge, indicator, icon._
 
 **Device** — the board a build targets, as opposed to the host. Half of the
-boundary rule: portable code runs on both, `main.c` and `voice.c` run on the
-host, `firmware/main/` runs on the device. _Avoid: target, hardware, embedded side._
+boundary rule: `ui/` runs on both, `host/` runs on the host, `firmware/main/`
+runs on the device — the directory is the rule. _Avoid: target, hardware, embedded side._
 
 **Dim** — how a corner draws a reading the platform does not have: `LV_OPA_30`,
 never hidden. An empty corner reads as a bug, a dim one reads as "no". It is
@@ -78,8 +78,9 @@ transition, animation, morphing._
 at 1:1, which is the whole reason the simulator is worth having. _Avoid:
 screen, display, LCD._
 
-**Portable half** — `ui.c`, `ui.h` and the three generated fonts: the files
-both builds compile unchanged. LVGL and the C standard library only. _Avoid:
+**Portable half** — `ui/`: `ui.c`, `ui.h` and the three generated fonts, the
+files both builds compile unchanged. LVGL and the C standard library only. Its
+opposite number is `host/`, and there is no `src/` holding both. _Avoid:
 shared code, common, core._
 
 **Reference clip** — `voices/kai.opus` and the transcript beside it, the
@@ -113,7 +114,7 @@ exchange, round, interaction._
 views on it, and the morph is how it gets from one to the other. _Avoid:
 screen, page, mode._
 
-**Voice loop** — `voice.c`: the microphone, Parakeet, Chatterbox and the
+**Voice loop** — `host/voice.c`: the microphone, Parakeet, Chatterbox and the
 speaker, on a thread of its own. Host-only, and the reason the bottom two
 corners are no longer faked. _Avoid: audio pipeline, speech stack, assistant
 backend._

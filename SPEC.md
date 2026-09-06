@@ -13,8 +13,8 @@ building the watch face.
   ESP-IDF plus the two drivers for this board's panel and touch
   controller, and nothing else.
 - LVGL stays pinned to a release tag. Never `master`.
-- `ui.c` / `ui.h` must not reference SDL or ESP-IDF; they compile unchanged into
-  the firmware.
+- `ui/` must not reference SDL or ESP-IDF; it compiles unchanged into the
+  firmware. Host-only code lives in `host/`; the directory is the boundary.
 - The simulator window stays 410 x 502, 1:1.
 - The hour and minute groups stay separate objects, symmetric about the
   centre: they are the assistant's two eyes.
@@ -40,7 +40,7 @@ layout — turns the fast loop back into guesswork.
 **Done means.**
 
 - `make firmware` builds `firmware/` against the repo root's own `lvgl/` and
-  `lv_conf.h`, with `ui.c` and the three fonts compiled from where they sit.
+  `lv_conf.h`, with `ui/`'s four files compiled from where they sit.
 - The panel, the touch and the platform readouts reach the UI only through
   `ui_build()` and `ui_status_set()`.
 - `make check` still passes on a machine with no ESP-IDF on it.
@@ -60,7 +60,7 @@ there breaks everywhere.
 
 - Pressing `Hey Kai` opens the microphone; a sentence spoken into it comes
   back out of the speakers, and the two corners light while it does.
-- `voice.c` is host-only and uses nothing but SDL2 and the C standard library:
-  no HTTP library, no JSON library.
+- `host/voice.c` uses nothing but SDL2 and the C standard library: no HTTP
+  library, no JSON library.
 - `make check` still passes with no oMLX server running and no `voices/` in
   the tree.
