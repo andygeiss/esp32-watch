@@ -42,7 +42,7 @@ exists**; moving to it is a deliberate decision with a re-check of the
 
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with five changes. It sits at
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with six changes. It sits at
 the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that root
 on the include path.
 
@@ -51,13 +51,14 @@ on the include path.
 | 15 | `#if 0` -> `#if 1` | **The file is inert without this, and it is the most common way to lose an hour here.** The template wraps its whole body in `#if 0`; leave it and LVGL silently compiles against built-in defaults, so every other setting below does nothing. Verify with `grep -c '^#if 1 /\* Set this' lv_conf.h` — must print `1`. |
 | 30 | `LV_COLOR_DEPTH 16` | The panel is RGB565. Already 16 in the v9.4 template; kept explicit so a template bump cannot change it silently. |
 | 72 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. The device has 8 MB PSRAM, so 512 KB is affordable there too. |
+| 611 | `LV_FONT_MONTSERRAT_18 1` | The corner readouts, and the WiFi and battery symbols, which LVGL compiles into its built-in fonts. |
 | 618 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
 | 1212 | `LV_USE_SDL 1` | Compiles LVGL's own SDL display and input backend — the host half of the simulator. The firmware build sets this back to `0`. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_32|LV_USE_SDL)\b' lv_conf.h
+    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_18|LV_FONT_MONTSERRAT_32|LV_USE_SDL)\b' lv_conf.h
 
 ## The host / device boundary
 
@@ -71,6 +72,12 @@ This is the rule that matters most as the code grows.
 
 New code goes on the portable side unless it genuinely needs the host; decide
 which side a new file is on before writing it.
+
+A fact the UI needs but cannot reach for itself — the battery, the radio —
+crosses in the other direction, through a struct and a setter in `ui.h`
+(`ui_status_t`, `ui_status_set()`). The host fills it with a fake, the
+firmware will fill it from the hardware, and `ui.c` never learns which. That
+is the pattern for the next one too.
 
 The check that settles it is the symbol list — compile the portable side alone
 and look at what it leaves undefined. Anything but `lv_*` and libc is a leak:
@@ -178,6 +185,16 @@ left of centre, the minute group 94 px right of it, the date as `MM/DD`
 centred below them, and a `Hey Kai` button 32 px off the bottom. One 1 Hz
 `lv_timer` refreshes all three labels.
 
+**Corners.** `LV_SYMBOL_WIFI` top-left, the charge as `62% ` top-right, the
+weekday bottom-left and the microphone bottom-right, in LVGL's built-in
+Montserrat 18 — the symbols ship inside the built-in fonts, so nothing had to
+be generated. A reading the platform does not have is **dimmed rather than
+hidden**: an empty corner reads as a bug, a dim one reads as "no". The
+weekday leaves with the clock; battery, WiFi and the microphone stay up in
+both views, because system state does not stop mattering while the assistant
+is listening. The values arrive through `ui_status_set()` — see the
+host/device boundary above.
+
 **Assistant.** The same two groups, now the assistant's two eyes: 120 px amber
 circles in the same places, with the digits and the date faded out. The button
 reads `Quit` and switches back.
@@ -206,6 +223,12 @@ the vertical centring of the time-and-date stack and the button's distance
 from the bottom all derive from it. It is also what caps the digits at 118 px:
 two 158 px groups plus two 32 px margins leave 30 px between the groups, and
 a larger font would close that gap.
+
+The corners are safe to write in. A corner label's outermost pixel sits 32 px
+in on both axes, which stays inside the panel's rounded corner for any corner
+radius up to about 109 px — more than anything a 410 x 502 panel is likely to
+have. The bottom two clear the button as well: the weekday ends 24 px short of
+it and the microphone starts 44 px past it.
 
 ## Verifying a render without a screenshot
 

@@ -5,6 +5,7 @@
  * Clock view: hours left of centre, minutes right of it, the date below, and
  * a button that hands over to the assistant. Assistant view: the two digit
  * groups have become the assistant's two eyes, and the button reads Quit.
+ * Four corner readouts sit above both, fed by ui_status_set().
  *
  * The hour and minute groups are separate objects placed symmetrically about
  * the centre, because that is what lets them become a pair of eyes. Keep them
@@ -66,6 +67,11 @@ LV_FONT_DECLARE(ui_font_date_94);
 #define UI_BLINK_MS       70
 #define UI_BLINK_PAUSE_MS 3600
 
+/* The corner readouts, in LVGL's built-in Montserrat because their symbols
+ * come with it. A reading the platform does not have is dimmed, not hidden:
+ * an empty corner reads as a bug, a dim one reads as "no". */
+#define UI_STATUS_DIM LV_OPA_30
+
 #define UI_REFRESH_PERIOD_MS 1000
 
 typedef enum {
@@ -76,6 +82,11 @@ typedef enum {
 static lv_obj_t * hours_label;
 static lv_obj_t * minutes_label;
 static lv_obj_t * date_label;
+static lv_obj_t * wifi_label;
+static lv_obj_t * battery_label;
+static lv_obj_t * weekday_label;
+static lv_obj_t * mic_label;
+static ui_status_t status = { .battery_pct = -1 };
 static lv_obj_t * eyes[2];
 static lv_obj_t * button_label;
 static ui_view_t  view;
@@ -159,6 +170,7 @@ static void view_set(ui_view_t next)
     fade(hours_label,   assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
     fade(minutes_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
     fade(date_label,    assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
+    fade(weekday_label, assistant ? LV_OPA_TRANSP : LV_OPA_COVER);
 
     for (i = 0; i < 2; i++) {
         fade(eyes[i], assistant ? LV_OPA_COVER : LV_OPA_TRANSP);
@@ -244,6 +256,54 @@ static void button_create(lv_obj_t * parent)
     lv_obj_center(button_label);
 }
 
+/* The corner a readout sits in decides which way its margin points. */
+static lv_obj_t * corner_create(lv_obj_t * parent, lv_align_t align, const char * text)
+{
+    lv_obj_t * label = lv_label_create(parent);
+    bool left = align == LV_ALIGN_TOP_LEFT || align == LV_ALIGN_BOTTOM_LEFT;
+    bool top  = align == LV_ALIGN_TOP_LEFT || align == LV_ALIGN_TOP_RIGHT;
+
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
+    lv_label_set_text(label, text);
+    lv_obj_align(label, align, left ? UI_EDGE_MARGIN : -UI_EDGE_MARGIN,
+                 top ? UI_EDGE_MARGIN : -UI_EDGE_MARGIN);
+
+    return label;
+}
+
+static const char * battery_symbol(void)
+{
+    if (status.charging) return LV_SYMBOL_CHARGE;
+    if (status.battery_pct >= 90) return LV_SYMBOL_BATTERY_FULL;
+    if (status.battery_pct >= 65) return LV_SYMBOL_BATTERY_3;
+    if (status.battery_pct >= 40) return LV_SYMBOL_BATTERY_2;
+    if (status.battery_pct >= 15) return LV_SYMBOL_BATTERY_1;
+    return LV_SYMBOL_BATTERY_EMPTY;
+}
+
+/* Dimming is text_opa, not the object's opa, so it survives the view fades. */
+static void status_refresh(void)
+{
+    if (wifi_label == NULL) return; /* status arrived before the UI existed */
+
+    lv_obj_set_style_text_opa(wifi_label,
+                              status.wifi_up ? LV_OPA_COVER : UI_STATUS_DIM, LV_PART_MAIN);
+    lv_obj_set_style_text_opa(mic_label,
+                              status.listening ? LV_OPA_COVER : UI_STATUS_DIM, LV_PART_MAIN);
+
+    if (status.battery_pct < 0) {
+        lv_label_set_text_fmt(battery_label, "--%% %s", battery_symbol());
+    }
+    else {
+        lv_label_set_text_fmt(battery_label, "%d%% %s", status.battery_pct, battery_symbol());
+    }
+}
+
+static const char * const WEEKDAYS[] = {
+    "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
+};
+
 static void clock_refresh(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
@@ -255,6 +315,7 @@ static void clock_refresh(lv_timer_t * timer)
     lv_label_set_text_fmt(hours_label, "%02d", local.tm_hour);
     lv_label_set_text_fmt(minutes_label, "%02d", local.tm_min);
     lv_label_set_text_fmt(date_label, "%02d/%02d", local.tm_mon + 1, local.tm_mday);
+    lv_label_set_text(weekday_label, WEEKDAYS[local.tm_wday % 7]);
 }
 
 void ui_build(void)
@@ -273,9 +334,21 @@ void ui_build(void)
     minutes_label = digits_create(screen, UI_GROUP_OFFSET_X);
     date_label    = date_create(screen);
 
+    wifi_label    = corner_create(screen, LV_ALIGN_TOP_LEFT, LV_SYMBOL_WIFI);
+    battery_label = corner_create(screen, LV_ALIGN_TOP_RIGHT, "--%");
+    weekday_label = corner_create(screen, LV_ALIGN_BOTTOM_LEFT, "---");
+    mic_label     = corner_create(screen, LV_ALIGN_BOTTOM_RIGHT, LV_SYMBOL_VOLUME_MAX);
+    status_refresh();
+
     button_create(screen);
     view = UI_VIEW_CLOCK;
 
     timer = lv_timer_create(clock_refresh, UI_REFRESH_PERIOD_MS, NULL);
     lv_timer_ready(timer); /* draw the real time now, not a second from now */
+}
+
+void ui_status_set(const ui_status_t * next)
+{
+    status = *next;
+    status_refresh();
 }

@@ -22,6 +22,34 @@
  * no LVGL timer is due. */
 #define FRAME_INTERVAL_MS 16
 
+#define STATUS_PERIOD_MS 1000
+
+/* The host has no fuel gauge, no radio and no microphone, so the corner
+ * readouts get a stand-in: the charge walks down to nearly empty, charges
+ * back up, and the wake-word engine's microphone opens now and then. It moves
+ * far too fast to be real, on purpose — every state a readout can show goes
+ * past while you watch. The firmware replaces this with the real readings. */
+static void status_tick(lv_timer_t * timer)
+{
+    static ui_status_t fake = { .battery_pct = 87, .wifi_up = true };
+    static uint32_t ticks;
+
+    LV_UNUSED(timer);
+
+    if (fake.charging) {
+        fake.battery_pct++;
+        if (fake.battery_pct >= 100) fake.charging = false;
+    }
+    else {
+        fake.battery_pct--;
+        if (fake.battery_pct <= 5) fake.charging = true;
+    }
+
+    fake.listening = (ticks++ % 10) < 2;
+
+    ui_status_set(&fake);
+}
+
 int main(void)
 {
     SDL_SetMainReady();
@@ -40,6 +68,7 @@ int main(void)
     lv_sdl_keyboard_create();
 
     ui_build();
+    lv_timer_ready(lv_timer_create(status_tick, STATUS_PERIOD_MS, NULL));
 
     /* LV_SDL_DIRECT_EXIT is 1 in lv_conf.h: closing the window ends the process. */
     for (;;) {
