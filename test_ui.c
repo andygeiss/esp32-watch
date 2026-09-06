@@ -18,6 +18,9 @@
 #include "lvgl/lvgl.h"
 #include "ui.h"
 
+/* The assistant's two corners have a font of their own. */
+LV_FONT_DECLARE(ui_font_assistant_18);
+
 #define PANEL_WIDTH  410
 #define PANEL_HEIGHT 502
 
@@ -30,8 +33,8 @@
 
 /* Children of the screen, in the order ui_build() creates them. */
 enum {
-    EYE_LEFT, EYE_RIGHT, HOURS, MINUTES, DATE,
-    WIFI, BATTERY, WEEKDAY, MIC, BUTTON,
+    EYE_LEFT, EYE_RIGHT, HOURS, MINUTES, DATE, WEEKDAY,
+    WIFI, BATTERY, SPEAKER, MIC, BUTTON,
     CHILD_COUNT
 };
 
@@ -125,6 +128,7 @@ static void expect_clock_view(const char * when)
     CHECK(opa_of(child(HOURS)) == LV_OPA_COVER, "%s: hours faded (%d)", when, opa_of(child(HOURS)));
     CHECK(opa_of(child(MINUTES)) == LV_OPA_COVER, "%s: minutes faded", when);
     CHECK(opa_of(child(DATE)) == LV_OPA_COVER, "%s: date faded", when);
+    CHECK(opa_of(child(WEEKDAY)) == LV_OPA_COVER, "%s: weekday faded", when);
     CHECK(opa_of(child(EYE_LEFT)) == LV_OPA_TRANSP, "%s: left eye showing", when);
     CHECK(opa_of(child(EYE_RIGHT)) == LV_OPA_TRANSP, "%s: right eye showing", when);
     CHECK(lv_obj_get_width(child(EYE_LEFT)) == GROUP_WIDTH &&
@@ -139,6 +143,7 @@ static void expect_assistant_view(const char * when)
     CHECK(opa_of(child(HOURS)) == LV_OPA_TRANSP, "%s: hours still showing", when);
     CHECK(opa_of(child(MINUTES)) == LV_OPA_TRANSP, "%s: minutes still showing", when);
     CHECK(opa_of(child(DATE)) == LV_OPA_TRANSP, "%s: date still showing", when);
+    CHECK(opa_of(child(WEEKDAY)) == LV_OPA_TRANSP, "%s: weekday still showing", when);
     CHECK(opa_of(child(EYE_LEFT)) == LV_OPA_COVER, "%s: left eye not showing", when);
     CHECK(opa_of(child(EYE_RIGHT)) == LV_OPA_COVER, "%s: right eye not showing", when);
     CHECK(lv_obj_get_width(child(EYE_LEFT)) == EYE_SIZE &&
@@ -199,6 +204,22 @@ static void check_layout(void)
           "the two groups are not symmetric about the centre");
     CHECK(centred(child(DATE)), "the date is not centred: %d px left, %d px right",
           lv_obj_get_x(child(DATE)), PANEL_WIDTH - 1 - right_of(child(DATE)));
+    CHECK(centred(child(WEEKDAY)), "the weekday is not centred: %d px left, %d px right",
+          lv_obj_get_x(child(WEEKDAY)), PANEL_WIDTH - 1 - right_of(child(WEEKDAY)));
+
+    /* The stack reads big to small, top to bottom, and never overlaps. */
+    CHECK(lv_obj_get_y(child(DATE)) > bottom_of(child(HOURS)),
+          "the date is not below the time");
+    CHECK(lv_obj_get_y(child(WEEKDAY)) > bottom_of(child(DATE)),
+          "the weekday is not below the date");
+    CHECK(lv_obj_get_height(child(DATE)) < lv_obj_get_height(child(HOURS)),
+          "the date (%d px) is not smaller than the time (%d px)",
+          lv_obj_get_height(child(DATE)), lv_obj_get_height(child(HOURS)));
+    CHECK(lv_obj_get_height(child(WEEKDAY)) < lv_obj_get_height(child(DATE)),
+          "the weekday (%d px) is not smaller than the date (%d px)",
+          lv_obj_get_height(child(WEEKDAY)), lv_obj_get_height(child(DATE)));
+    CHECK(bottom_of(child(WEEKDAY)) < lv_obj_get_y(child(BUTTON)),
+          "the weekday runs into the button");
     CHECK(PANEL_HEIGHT - 1 - bottom_of(child(BUTTON)) == EDGE_MARGIN,
           "the button sits %d off the bottom, not %d",
           PANEL_HEIGHT - 1 - bottom_of(child(BUTTON)), EDGE_MARGIN);
@@ -209,14 +230,14 @@ static void check_layout(void)
           lv_obj_get_y(child(WIFI)) == EDGE_MARGIN, "wifi is not in the top-left corner");
     CHECK(PANEL_WIDTH - 1 - right_of(child(BATTERY)) == EDGE_MARGIN &&
           lv_obj_get_y(child(BATTERY)) == EDGE_MARGIN, "battery is not in the top-right corner");
-    CHECK(lv_obj_get_x(child(WEEKDAY)) == EDGE_MARGIN &&
-          PANEL_HEIGHT - 1 - bottom_of(child(WEEKDAY)) == EDGE_MARGIN,
-          "the weekday is not in the bottom-left corner");
+    CHECK(lv_obj_get_x(child(SPEAKER)) == EDGE_MARGIN &&
+          PANEL_HEIGHT - 1 - bottom_of(child(SPEAKER)) == EDGE_MARGIN,
+          "the speaker is not in the bottom-left corner");
     CHECK(PANEL_WIDTH - 1 - right_of(child(MIC)) == EDGE_MARGIN &&
           PANEL_HEIGHT - 1 - bottom_of(child(MIC)) == EDGE_MARGIN,
           "the microphone is not in the bottom-right corner");
-    CHECK(right_of(child(WEEKDAY)) < lv_obj_get_x(child(BUTTON)),
-          "the weekday runs into the button");
+    CHECK(right_of(child(SPEAKER)) < lv_obj_get_x(child(BUTTON)),
+          "the speaker runs into the button");
     CHECK(lv_obj_get_x(child(MIC)) > right_of(child(BUTTON)),
           "the microphone runs into the button");
 }
@@ -231,28 +252,52 @@ static void check_readouts(void)
           "hours read \"%s\", not two digits", hours);
     CHECK(strlen(date) == 5 && date[2] == '/', "the date reads \"%s\", not MM/DD", date);
     CHECK(strlen(text_of(child(WEEKDAY))) == 3,
-          "the weekday reads \"%s\"", text_of(child(WEEKDAY)));
-
+          "the weekday reads \"%s\", not three letters", text_of(child(WEEKDAY)));
     {
-        ui_status_t good = { .battery_pct = 62, .wifi_up = true };
-        ui_status_set(&good);
+        ui_status_t idle = { .battery_pct = 62, .wifi_up = true };
+        ui_status_set(&idle);
         CHECK(strncmp(text_of(child(BATTERY)), "62%", 3) == 0,
               "battery reads \"%s\" at 62%%", text_of(child(BATTERY)));
         CHECK(lv_obj_get_style_text_opa(child(WIFI), LV_PART_MAIN) == LV_OPA_COVER,
               "wifi is dim while the radio is up");
         CHECK(lv_obj_get_style_text_opa(child(MIC), LV_PART_MAIN) < LV_OPA_COVER,
               "the microphone is lit while it is shut");
+        CHECK(lv_obj_get_style_text_opa(child(SPEAKER), LV_PART_MAIN) < LV_OPA_COVER,
+              "the speaker is lit while it is quiet");
     }
     {
-        ui_status_t poor = { .battery_pct = 8, .charging = true, .listening = true };
-        ui_status_set(&poor);
+        ui_status_t listening = { .battery_pct = 8, .charging = true, .listening = true };
+        ui_status_set(&listening);
         CHECK(strncmp(text_of(child(BATTERY)), "8%", 2) == 0,
               "battery reads \"%s\" at 8%%", text_of(child(BATTERY)));
         CHECK(lv_obj_get_style_text_opa(child(WIFI), LV_PART_MAIN) < LV_OPA_COVER,
               "wifi is lit while the radio is down");
         CHECK(lv_obj_get_style_text_opa(child(MIC), LV_PART_MAIN) == LV_OPA_COVER,
               "the microphone is dim while it is open");
+        CHECK(lv_obj_get_style_text_opa(child(SPEAKER), LV_PART_MAIN) < LV_OPA_COVER,
+              "the speaker is lit while only the microphone is on");
     }
+    {
+        ui_status_t speaking = { .battery_pct = 50, .wifi_up = true, .speaking = true };
+        ui_status_set(&speaking);
+        CHECK(lv_obj_get_style_text_opa(child(SPEAKER), LV_PART_MAIN) == LV_OPA_COVER,
+              "the speaker is dim while it is playing");
+        CHECK(lv_obj_get_style_text_opa(child(MIC), LV_PART_MAIN) < LV_OPA_COVER,
+              "the microphone is lit while only the speaker is on");
+    }
+    {
+        /* Both at once: a firmware with echo cancellation listens while it
+         * talks, and the two readouts must not be wired as one mode. */
+        ui_status_t both = { .battery_pct = 50, .wifi_up = true,
+                             .listening = true, .speaking = true };
+        ui_status_set(&both);
+        CHECK(lv_obj_get_style_text_opa(child(MIC), LV_PART_MAIN) == LV_OPA_COVER &&
+              lv_obj_get_style_text_opa(child(SPEAKER), LV_PART_MAIN) == LV_OPA_COVER,
+              "the microphone and the speaker cannot both be lit");
+    }
+    CHECK(lv_obj_get_style_text_font(child(MIC), LV_PART_MAIN) == &ui_font_assistant_18 &&
+          lv_obj_get_style_text_font(child(SPEAKER), LV_PART_MAIN) == &ui_font_assistant_18,
+          "an assistant corner is not drawn with the assistant font");
     {
         ui_status_t unknown = { .battery_pct = -1, .wifi_up = true };
         ui_status_set(&unknown);
@@ -318,7 +363,7 @@ int main(void)
           lv_obj_get_y(child(EYE_LEFT)) + lv_obj_get_height(child(EYE_LEFT)) / 2 == eye_centre_y,
           "the eye moved during the morph; only its size may change");
     CHECK(opa_of(child(WIFI)) == LV_OPA_COVER && opa_of(child(BATTERY)) == LV_OPA_COVER &&
-          opa_of(child(WEEKDAY)) == LV_OPA_COVER && opa_of(child(MIC)) == LV_OPA_COVER,
+          opa_of(child(SPEAKER)) == LV_OPA_COVER && opa_of(child(MIC)) == LV_OPA_COVER,
           "a corner readout left with the clock; all four sit over both views");
 
     printf("blink\n");

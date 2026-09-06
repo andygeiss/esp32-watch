@@ -33,6 +33,7 @@ static void status_tick(lv_timer_t * timer)
 {
     static ui_status_t fake = { .battery_pct = 87, .wifi_up = true };
     static uint32_t ticks;
+    uint32_t phase;
 
     LV_UNUSED(timer);
 
@@ -45,7 +46,11 @@ static void status_tick(lv_timer_t * timer)
         if (fake.battery_pct <= 5) fake.charging = true;
     }
 
-    fake.listening = (ticks++ % 10) < 2;
+    /* Idle, listening, then speaking. They are separate flags rather than a
+     * mode, so a firmware with echo cancellation can raise both at once. */
+    phase = ticks++ % 12;
+    fake.listening = phase >= 2 && phase < 6;
+    fake.speaking = phase >= 7 && phase < 11;
 
     ui_status_set(&fake);
 }

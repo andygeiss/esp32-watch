@@ -37,7 +37,8 @@ target_link_libraries(lvgl PUBLIC PkgConfig::SDL2)
 add_library(kai_ui STATIC
     ui.c
     ui_font_digits_118.c  # generated, see tools/gen_fonts.py
-    ui_font_date_94.c
+    ui_font_date_72.c
+    ui_font_assistant_18.c
 )
 target_link_libraries(kai_ui PUBLIC lvgl)
 

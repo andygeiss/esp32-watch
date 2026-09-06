@@ -22,7 +22,11 @@ typedef struct {
     int  battery_pct; /**< 0-100, or negative while it is not known yet */
     bool charging;
     bool wifi_up;
-    bool listening;   /**< the wake-word engine has the microphone open */
+    /* The assistant's two ends. Independent on purpose: with acoustic echo
+     * cancellation a real one listens while it talks, which is what lets you
+     * interrupt it. A half-duplex firmware simply never sets both. */
+    bool listening;   /**< the microphone is open */
+    bool speaking;    /**< the speaker is playing */
 } ui_status_t;
 
 /** Build the clock face on the active screen. Call once, after lv_init(). */

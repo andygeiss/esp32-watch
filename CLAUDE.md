@@ -42,7 +42,7 @@ exists**; moving to it is a deliberate decision with a re-check of the
 
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with six changes. It sits at
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with seven changes. It sits at
 the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that root
 on the include path.
 
@@ -53,12 +53,13 @@ on the include path.
 | 72 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. The device has 8 MB PSRAM, so 512 KB is affordable there too. |
 | 611 | `LV_FONT_MONTSERRAT_18 1` | The corner readouts, and the WiFi and battery symbols, which LVGL compiles into its built-in fonts. |
 | 618 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
+| 622 | `LV_FONT_MONTSERRAT_40 1` | The weekday under the date. It is letters, which none of the generated fonts here hold. |
 | 1212 | `LV_USE_SDL 1` | Compiles LVGL's own SDL display and input backend — the host half of the simulator. The firmware build sets this back to `0`. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_18|LV_FONT_MONTSERRAT_32|LV_USE_SDL)\b' lv_conf.h
+    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_(18|32|40)|LV_USE_SDL)\b' lv_conf.h
 
 ## The host / device boundary
 
@@ -144,13 +145,16 @@ Each of these was a real failure or a real warning, not a preference:
 
 ## The fonts
 
-Two are generated here, because LVGL ships Montserrat pre-generated only up to
-48 px and that is far too small on this panel:
+Three are generated here, because LVGL ships Montserrat pre-generated only up
+to 48 px — far too small on this panel — and ships no microphone glyph at all:
 
-| File | Drawn with it |
-|---|---|
-| `ui_font_digits_118.c` | the clock digits — `0`-`9` at 118 px, in 79 px cells |
-| `ui_font_date_94.c` | the date — `0`-`9` and `/` at 94 px, 80% of the digits |
+| File | Drawn with it | From |
+|---|---|---|
+| `ui_font_digits_118.c` | the clock digits — `0`-`9` at 118 px, in 79 px cells | Montserrat |
+| `ui_font_date_72.c` | the date — `0`-`9` and `/` at 72 px, about 60% of the digits | Montserrat |
+| `ui_font_assistant_18.c` | the speaker and microphone corners — U+F028 and U+F130, 313 bytes | FontAwesome 5 Solid |
+
+Both source faces are the ones LVGL ships in `lvgl/scripts/built_in_font/`.
 
 Both are checked in, so the build needs nothing extra. Regenerate them only to
 change a size, which needs node because the converter comes from npm:
@@ -168,9 +172,9 @@ Three things about them are deliberate:
   pair would pull a digit back out of its cell.
 - **Punctuation keeps its own advance.** The `/` of `MM/DD` stays 33 px rather
   than taking a 63 px digit cell, where it would look stranded.
-- **They hold those characters and nothing else** — 25 KB and 17 KB of glyphs —
-  and there is no glyph to fall back on, so placeholder text in `ui.c` has to
-  be made of characters the font actually has.
+- **They hold those characters and nothing else** — 25 KB, 10 KB and 313 bytes
+  of glyphs — and there is no glyph to fall back on, so placeholder text in
+  `ui.c` has to be made of characters the font actually has.
 
 Changing a size touches four places: `tools/gen_fonts.py`, the file name in
 `CMakeLists.txt`, and in `ui.c` the font name and the cell and line-height
@@ -184,19 +188,35 @@ The button is the exception: its label is letters, so it uses LVGL's built-in
 `ui_build()` puts two views on one screen and morphs between them.
 
 **Clock.** Black background, amber `0xFFB000` throughout: the hour group 94 px
-left of centre, the minute group 94 px right of it, the date as `MM/DD`
-centred below them, and a `Hey Kai` button 32 px off the bottom. One 1 Hz
-`lv_timer` refreshes all three labels.
+left of centre, the minute group 94 px right of it, then `MM/DD` and its
+weekday centred below them, and a `Hey Kai` button 32 px off the bottom. One
+1 Hz `lv_timer` refreshes all four labels.
 
-**Corners.** `LV_SYMBOL_WIFI` top-left, the charge as `62% ` top-right, the
-weekday bottom-left and the microphone bottom-right, in LVGL's built-in
-Montserrat 18 — the symbols ship inside the built-in fonts, so nothing had to
-be generated. A reading the platform does not have is **dimmed rather than
-hidden**: an empty corner reads as a bug, a dim one reads as "no". All four
-stay up in both views — the corners are a status layer over the top of
-whichever face is showing, and state does not stop mattering while the
-assistant is listening. The values arrive through `ui_status_set()` — see the
-host/device boundary above.
+The stack steps down in size — 118 px for the time, 72 px for the date, 40 px
+for the weekday — and the gap above the date-and-weekday pair (24 px) is wider
+than the one inside it (8 px), so the two read as one block under the time
+rather than as three separate lines. Every offset in it is derived from those
+heights and `UI_EDGE_MARGIN`; none is typed in by hand.
+
+**Corners.** The hardware along the top: `LV_SYMBOL_WIFI` top-left and the
+charge as `62% ` top-right, both in LVGL's built-in Montserrat 18, whose
+symbols ship inside it. The assistant along the bottom: the speaker
+bottom-left and the microphone bottom-right, from `ui_font_assistant_18.c`,
+because LVGL has a speaker symbol but no microphone at all.
+
+**The speaker and the microphone are independent flags, not one mode.** A
+half-duplex firmware never raises both — the speaker plays, then the
+microphone opens. One with acoustic echo cancellation, which ESP-SR gives the
+S3, listens *while* it talks, and that is exactly what lets someone interrupt
+the assistant mid-sentence. Wiring the two readouts as a single toggle would
+make that state undrawable, so `ui.c` reads `listening` and `speaking`
+separately and the test asserts both can be lit at once.
+
+A reading the platform does not have is **dimmed rather than hidden**: an
+empty corner reads as a bug, a dim one reads as "no". All four stay up in both
+views — the corners are a status layer over whichever face is showing, and
+none of it stops mattering while the assistant is listening. The values arrive
+through `ui_status_set()` — see the host/device boundary above.
 
 **Assistant.** The same two groups, now the assistant's two eyes: 120 px amber
 circles in the same places, with the digits and the date faded out. The button
@@ -230,8 +250,8 @@ a larger font would close that gap.
 The corners are safe to write in. A corner label's outermost pixel sits 32 px
 in on both axes, which stays inside the panel's rounded corner for any corner
 radius up to about 109 px — more than anything a 410 x 502 panel is likely to
-have. The bottom two clear the button as well: the weekday ends 24 px short of
-it and the microphone starts 44 px past it.
+have. The bottom two clear the button as well: the speaker ends 43 px short of
+it and the microphone starts 51 px past it.
 
 ## Verifying a render without a screenshot
 
@@ -243,8 +263,8 @@ it, and `make test` runs it: it creates a display with
 `ui_build()`, steps a fake tick source, clicks the button through
 `lv_obj_send_event()`, and checks geometry, opacity, label text and the pixels
 themselves. 59 checks. Three of them have been made to fail on purpose:
-fading the weekday out with the clock, putting the edge margin back to 16, and
-letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`. Do that to any check you add —
+fading a corner readout out with the clock, putting the edge margin back to
+16, and letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`. Do that to any check you add —
 a check that has never failed is a check you have not tested.
 
 Two things to know before writing another renderer like it:
