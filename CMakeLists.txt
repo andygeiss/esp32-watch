@@ -34,7 +34,8 @@ target_link_libraries(lvgl PUBLIC PkgConfig::SDL2)
 add_executable(kai_sim
     main.c
     ui.c
-    ui_font_digits_130.c  # generated, see tools/gen_digit_font.py
+    ui_font_digits_118.c  # generated, see tools/gen_fonts.py
+    ui_font_date_94.c
 )
 
 target_link_libraries(kai_sim PRIVATE lvgl PkgConfig::SDL2)

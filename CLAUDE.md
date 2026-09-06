@@ -42,7 +42,7 @@ exists**; moving to it is a deliberate decision with a re-check of the
 
 ## lv_conf.h
 
-`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with four changes. It sits at
+`lv_conf.h` is a copy of `lvgl/lv_conf_template.h` with five changes. It sits at
 the project root and LVGL finds it via `LV_CONF_INCLUDE_SIMPLE` plus that root
 on the include path.
 
@@ -51,12 +51,13 @@ on the include path.
 | 15 | `#if 0` -> `#if 1` | **The file is inert without this, and it is the most common way to lose an hour here.** The template wraps its whole body in `#if 0`; leave it and LVGL silently compiles against built-in defaults, so every other setting below does nothing. Verify with `grep -c '^#if 1 /\* Set this' lv_conf.h` — must print `1`. |
 | 30 | `LV_COLOR_DEPTH 16` | The panel is RGB565. Already 16 in the v9.4 template; kept explicit so a template bump cannot change it silently. |
 | 72 | `LV_MEM_SIZE (512 * 1024U)` | The 64 KB default cannot hold the objects and draw buffers of a 410 x 502 UI. The device has 8 MB PSRAM, so 512 KB is affordable there too. |
+| 618 | `LV_FONT_MONTSERRAT_32 1` | The `Hey Kai` / `Quit` button label is letters, and the generated fonts hold only digits. Built-in fonts are off by default. |
 | 1212 | `LV_USE_SDL 1` | Compiles LVGL's own SDL display and input backend — the host half of the simulator. The firmware build sets this back to `0`. |
 
 Line numbers are for the v9.4.0 template. Re-grep rather than trusting them
 after any LVGL bump:
 
-    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_USE_SDL)\b' lv_conf.h
+    grep -n -E '^\s*#define (LV_COLOR_DEPTH|LV_MEM_SIZE|LV_FONT_MONTSERRAT_32|LV_USE_SDL)\b' lv_conf.h
 
 ## The host / device boundary
 
@@ -131,52 +132,72 @@ Each of these was a real failure or a real warning, not a preference:
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
   unset — a plain `set()` of the same name gets cleared and the options stay on.
 
-## The digit font
+## The fonts
 
-The clock digits are `ui_font_digits_130.c`: Montserrat Medium at 130 px,
-digits only, generated from the TTF that LVGL ships in
-`lvgl/scripts/built_in_font/`. It is checked in, so the build needs nothing
-extra; regenerate it only to change the size, which needs node because the
-converter comes from npm:
+Two are generated here, because LVGL ships Montserrat pre-generated only up to
+48 px and that is far too small on this panel:
 
-    tools/gen_digit_font.py --size 130
+| File | Drawn with it |
+|---|---|
+| `ui_font_digits_118.c` | the clock digits — `0`-`9` at 118 px, in 79 px cells |
+| `ui_font_date_94.c` | the date — `0`-`9` and `/` at 94 px, 80% of the digits |
 
-Two things about that font are deliberate:
+Both are checked in, so the build needs nothing extra. Regenerate them only to
+change a size, which needs node because the converter comes from npm:
 
-- **The digits are monospaced.** Montserrat's figures are proportional — at
-  130 px a `1` is 48 px wide where a `0` is 87 px — so a centred label shifts
-  sideways whenever a digit changes, and at this size the shift is impossible
-  to miss. `lv_font_conv` has no monospace switch, so the script rewrites
-  every glyph to the widest advance, 87 px, with its ink centred in that cell,
-  the way the digit cells of a VFD sit. `--no-kerning` belongs to the same
-  decision: a kern pair would pull a digit back out of its cell. A group of
-  two digits is therefore 174 px wide whatever the time is.
-- **It holds `0`-`9` and nothing else.** 31 KB of glyphs, and no glyph to fall
-  back on, so placeholder text in `ui.c` has to be digits as well.
+    tools/gen_fonts.py
 
-48 px is the largest Montserrat LVGL ships pre-generated, which is what kept
-the digits too small before. `LV_FONT_MONTSERRAT_48` is now `0` — nothing
-else uses it — and `LV_FONT_MONTSERRAT_14` stays on as `LV_FONT_DEFAULT`.
+Three things about them are deliberate:
+
+- **Tabular figures.** Montserrat's figures are proportional — at 118 px a `1`
+  is 44 px wide where a `0` is 79 px — so a centred label shifts sideways
+  whenever a digit changes, and at this size the shift is impossible to miss.
+  `lv_font_conv` has no monospace switch, so the script rewrites every digit to
+  the widest digit's advance with its ink centred in that cell, the way the
+  digit cells of a VFD sit. `--no-kerning` belongs to the same decision: a kern
+  pair would pull a digit back out of its cell.
+- **Punctuation keeps its own advance.** The `/` of `MM/DD` stays 33 px rather
+  than taking a 63 px digit cell, where it would look stranded.
+- **They hold those characters and nothing else** — 25 KB and 17 KB of glyphs —
+  and there is no glyph to fall back on, so placeholder text in `ui.c` has to
+  be made of characters the font actually has.
+
+Changing a size touches four places: `tools/gen_fonts.py`, the file name in
+`CMakeLists.txt`, and in `ui.c` the font name and the cell and line-height
+constants the layout is derived from.
+
+The button is the exception: its label is letters, so it uses LVGL's built-in
+`lv_font_montserrat_32`.
 
 ## Current UI
 
-`ui_build()` draws the clock face on the active screen: black background, amber
-`0xFFB000` digits in `ui_font_digits_130`, the hour group 102 px left of centre
-and the minute group 102 px right of it, refreshed by a 1 Hz `lv_timer`.
+`ui_build()` puts two views on one screen and morphs between them.
 
-That 102 px is derived, not chosen: the layout rule is a **16 px margin
-between a group's outer edge and the edge of the panel**, and with a 174 px
-group on a 410 px panel that puts each group's centre 102 px out, leaving
-30 px between the two groups. Change `UI_EDGE_MARGIN` and the offset follows.
-The margin is measured on the group box; the amber itself sits further in,
-by however much narrower than its 87 px cell the digit showing happens to be.
+**Clock.** Black background, amber `0xFFB000` throughout: the hour group 94 px
+left of centre, the minute group 94 px right of it, the date as `MM/DD`
+centred below them, and a `Hey Kai` button 32 px off the bottom. One 1 Hz
+`lv_timer` refreshes all three labels.
 
-The two digit groups are deliberately **separate objects placed symmetrically
-about the centre**, because they have to become the assistant's two eyes. Keep
-them independent: do not merge them into a single label and do not put a fixed
-separator between them.
+**Assistant.** The same two groups, now the assistant's two eyes: 120 px amber
+circles in the same places, with the digits and the date faded out. The button
+reads `Quit` and switches back.
 
-The morph itself is not scaffolded yet.
+**The morph** takes 400 ms. Each eye is an `lv_obj` that starts as the digit
+group's own box — same size, same centre, `LV_RADIUS_CIRCLE`, invisible — so
+the switch is that box growing square while the digits fade off the front of
+it. Nothing moves; only size and opacity animate, and `lv_obj_align` keeps
+each eye on its centre as it resizes.
+
+This is why the two digit groups are **separate objects placed symmetrically
+about the centre**: they are the two eyes. Keep them independent — do not
+merge them into a single label and do not put a fixed separator between them.
+
+**The layout rule is a 32 px margin.** Nothing comes closer than that to an
+edge of the panel. `UI_EDGE_MARGIN` is the constant; the 94 px group offset,
+the vertical centring of the time-and-date stack and the button's distance
+from the bottom all derive from it. It is also what caps the digits at 118 px:
+two 158 px groups plus two 32 px margins leave 30 px between the groups, and
+a larger font would close that gap.
 
 ## Verifying a render without a screenshot
 
@@ -185,6 +206,13 @@ permission for the terminal, which is not granted here, so window screenshots
 fail with `could not create image from display`. To check pixels instead,
 render `ui.c` headlessly: create a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, call `ui_build()`,
-pump `lv_timer_handler()`, then `lv_refr_now()` and dump the buffer. Amber
+pump `lv_timer_handler()`, then `lv_refr_now()` and dump the buffer.
+
+To watch the morph you need more than one frame, and then the display also
+needs a flush callback that calls `lv_display_flush_ready()`. Without one the
+first refresh leaves the display marked as flushing and the second spins in
+`wait_for_flushing` forever — a silent hang, since `LV_USE_LOG` is off. Step a
+fake tick source rather than the wall clock, so a frame can be taken part-way
+through the 400 ms animation. Amber
 `0xFFB000` reads back as `#FFB200` after the RGB565 round-trip — that is
 correct, not a bug.
