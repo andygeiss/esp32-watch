@@ -102,6 +102,19 @@ static int block_rms(const int16_t * block, size_t n)
     return (int) root;
 }
 
+/* Exactly zero, not merely quiet. The quietest room still moves the last bit
+ * or two, so a block that is all zeros came from a device that is delivering
+ * nothing — muted, or pointed somewhere that cannot capture. */
+static bool all_zero(const int16_t * block, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        if (block[i] != 0) return false;
+    }
+    return true;
+}
+
 void voice_turn_start(voice_turn_t * turn, uint32_t patience_ms)
 {
     memset(turn, 0, sizeof(*turn));
@@ -110,6 +123,10 @@ void voice_turn_start(voice_turn_t * turn, uint32_t patience_ms)
 
 voice_gate_t voice_turn_wait(voice_turn_t * turn)
 {
+    /* Before the patience is looked at, because the turn that matters most
+     * here is the one with no patience at all: asleep, waiting to be called. */
+    turn->dead_ms += VOICE_BLOCK_MS;
+
     if (turn->heard || turn->patience_ms == VOICE_WAIT_FOREVER) return VOICE_MORE;
 
     turn->waited_ms += VOICE_BLOCK_MS;
@@ -121,6 +138,8 @@ voice_gate_t voice_turn_feed(voice_turn_t * turn, const int16_t * block, size_t 
     int rms;
 
     if (n == 0) return VOICE_MORE;
+
+    if (!all_zero(block, n)) turn->dead_ms = 0;
 
     rms = block_rms(block, n);
     turn->samples += n;
@@ -140,6 +159,14 @@ voice_gate_t voice_turn_feed(voice_turn_t * turn, const int16_t * block, size_t 
     }
 
     return turn->samples >= VOICE_MAX_SAMPLES ? VOICE_DONE : VOICE_MORE;
+}
+
+bool voice_turn_dead(voice_turn_t * turn)
+{
+    if (turn->dead_told || turn->dead_ms < VOICE_DEAD_MS) return false;
+
+    turn->dead_told = true;
+    return true;
 }
 
 size_t voice_turn_at(const voice_turn_t * turn)

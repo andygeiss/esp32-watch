@@ -240,6 +240,14 @@ static size_t record(uint32_t patience_ms)
         size_t got;
 
         if (voice_turn_wait(&turn) == VOICE_NOTHING) break;
+        if (voice_turn_dead(&turn)) {
+            /* The simulator lists the inputs it can see here, because a Mac
+             * has several and picks for you. This board has one, so what is
+             * left to suspect is the gain and the wiring behind it. */
+            ESP_LOGW(TAG, "the microphones have delivered nothing but zeros for %d s — "
+                          "suspect BOARD_MIC_GAIN_DB, or the ES7210 behind it",
+                     VOICE_DEAD_MS / 1000);
+        }
 
         /* board_mic_read blocks until it has the whole block, so a working
          * codec paces this loop the way SDL_Delay paces the simulator's. */

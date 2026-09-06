@@ -65,7 +65,10 @@ makes them read as a pair rather than as two discs. _Avoid: iris, dot, ball._
 **Gate** — the loudness a block of microphone audio has to clear to count as
 speech, and the 800 ms below it that ends a turn. Measured, not chosen: a
 quiet room reads a mean RMS of 42, speech runs in the thousands, and
-`VOICE_SILENCE_RMS` sits at 500 between them. _Avoid: VAD, threshold, endpoint detection._
+`VOICE_SILENCE_RMS` sits at 500 between them. The same measurement is what
+lets it call a device dead: a room never reads zero, so three seconds of
+exact zeros is a microphone that is not hearing rather than a room with
+nobody in it. _Avoid: VAD, threshold, endpoint detection._
 
 **Goodbye** — a word that ends the session and hands the watch back to the
 clock: `tschüss`, `quit`, `stop`, matched against the whole transcript so that

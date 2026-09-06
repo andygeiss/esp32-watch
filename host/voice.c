@@ -313,6 +313,26 @@ static SDL_AudioSpec     speaker_spec;
 static SDL_Thread * worker;
 static int16_t *    pcm; /* one turn's recording */
 
+/* What there is to listen to. SDL opens the system default and will not say
+ * which device that is: SDL_GetDefaultAudioInfo answers with the literal words
+ * "System default" on sdl2-compat, which is what Homebrew's sdl2 now is. So
+ * the log lists the candidates instead and leaves the naming to System
+ * Settings, which is where the choice is made anyway. The device half needs
+ * none of this — its microphones are soldered on. */
+static void log_inputs(void)
+{
+    int n = SDL_GetNumAudioDevices(1);
+    int i;
+
+    if (n <= 0) {
+        SDL_Log("voice: SDL can see no inputs at all");
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        SDL_Log("voice:   input %d: %s", i, SDL_GetAudioDeviceName(i, 1));
+    }
+}
+
 /* Records one utterance and returns how many samples it was.
  *
  * `patience_ms` is how long it will wait for the first word before giving up;
@@ -342,6 +362,12 @@ static size_t record(uint32_t patience_ms)
         /* Wall time rather than samples, so a device that has stopped
          * delivering still hands the deadline back. */
         if (voice_turn_wait(&turn) == VOICE_NOTHING) break;
+        if (voice_turn_dead(&turn)) {
+            SDL_Log("voice: the default input has delivered nothing but zeros for "
+                    "%d s. A room never reads zero, so it is not hearing — pick one "
+                    "of the inputs above, in System Settings > Sound > Input.",
+                    VOICE_DEAD_MS / 1000);
+        }
 
         got = SDL_DequeueAudio(microphone, pcm + at,
                                (uint32_t) ((VOICE_MAX_SAMPLES - at) * sizeof(int16_t)));
@@ -577,6 +603,8 @@ void voice_start(void)
         return;
     }
     SDL_PauseAudioDevice(microphone, 1);
+    SDL_Log("voice: listening through the system default at %d Hz mono", have.freq);
+    log_inputs();
 
     SDL_AtomicSet(&running, 1);
     worker = SDL_CreateThread(loop, "kai-voice", NULL);

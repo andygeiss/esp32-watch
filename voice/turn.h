@@ -46,6 +46,13 @@
 #define VOICE_MIN_SPEECH_MS 300
 #define VOICE_MAX_TURN_MS   20000
 
+/* How long nothing but exact zeros has to go on before it is a broken device
+ * rather than a quiet moment. The same measurement says it: a room reads an
+ * RMS in the tens and never reads zero, so a stream of zeros is a microphone
+ * that opened and is not hearing. Long enough to be sure, short enough to be
+ * told at start-up. */
+#define VOICE_DEAD_MS 3000
+
 /* How long the assistant waits to be spoken to before going back to the
  * clock. With nothing to press, this is the way out that needs nothing said
  * at all. VOICE_WAIT_FOREVER is the other case, asleep, where there is
@@ -104,8 +111,10 @@ typedef struct {
     uint32_t patience_ms;
     uint32_t quiet_ms;
     uint32_t waited_ms;
+    uint32_t dead_ms;
     size_t   samples;
     bool     heard;
+    bool     dead_told;
 } voice_turn_t;
 
 /** Begin a turn. `patience_ms` is the wait for the first word, or FOREVER. */
@@ -123,6 +132,23 @@ voice_gate_t voice_turn_wait(voice_turn_t * turn);
  * `voice_turn_at(turn)`. Returns VOICE_DONE when the sentence has ended.
  */
 voice_gate_t voice_turn_feed(voice_turn_t * turn, const int16_t * block, size_t n);
+
+/**
+ * True the one time a turn can be sure the microphone is not working: nothing
+ * but samples of exactly zero for VOICE_DEAD_MS. It is counted in wall time,
+ * off voice_turn_wait(), so a device handing back no blocks at all counts the
+ * same as one handing back silent ones.
+ *
+ * This is the difference between a quiet room and a dead device, which the
+ * rest of the gate cannot tell apart — both simply never end a turn, and the
+ * watch waits for a wake phrase that can never arrive.
+ *
+ * Call it once per block, beside voice_turn_wait(). It answers true once per
+ * turn, so the platform logs a line rather than fifty a second; asleep there
+ * is only ever the one turn, so that is once. What to say about it is the
+ * platform's, because so is the device — this file does no logging.
+ */
+bool voice_turn_dead(voice_turn_t * turn);
 
 /** Where the next block goes, as an offset into the caller's buffer. */
 size_t voice_turn_at(const voice_turn_t * turn);

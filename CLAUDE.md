@@ -638,6 +638,26 @@ Five things about it are load-bearing:
   reads a mean RMS of 42 and peaks at 82; speech runs in the thousands. The
   gate is at 500, and 800 ms under it ends the turn. Raise `VOICE_SILENCE_RMS`
   in a louder room.
+- **A stream of exact zeros is a broken microphone, not a quiet room**, and the
+  same measurement is what says so: a room never reads zero. Without that
+  distinction the two are the same thing to the gate — both simply never end a
+  turn — and a watch listening to a dead device waits forever for a wake phrase
+  that cannot arrive, in silence, with nothing in the log. `voice_turn_dead()`
+  is the rule, in `voice/turn.c` because it is true of both microphones, and it
+  answers true once per turn so each half logs one line of its own:
+  `host/voice.c` points at System Settings, `firmware/main/voice.c` at
+  `BOARD_MIC_GAIN_DB` and the ES7210. This is a real failure and not a
+  hypothetical one — a Mac whose default input is a pair of AirPods that are
+  connected but not capturing opens at 16 kHz mono, delivers zeros, and looks
+  from the outside exactly like a watch that is ignoring you.
+- **SDL will not say which input it opened.** `SDL_OpenAudioDevice(NULL, ...)`
+  takes the system default, and `SDL_GetDefaultAudioInfo` on sdl2-compat —
+  which is what Homebrew's `sdl2` now is — answers with the literal words
+  "System default" rather than a device, and fails outright if the spec it is
+  handed is NULL. So `log_inputs()` lists the inputs SDL can see at start-up
+  instead, and the choice between them stays where macOS keeps it. Naming the
+  real one would mean CoreAudio, which is a framework and a page of code for a
+  log line.
 - **The close box has to reach `voice_stop()` before it reaches `SDL_Quit()`,**
   which is what `quit_first()` in `host/main.c` is for. LVGL's SDL backend
   answers `SDL_QUIT` with `SDL_Quit()` and *then* `exit(0)` — `lv_sdl_window.c`
