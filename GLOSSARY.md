@@ -18,7 +18,13 @@ _Avoid: active, listening, session._
 **Blink** — the infinite animation each eye runs while the assistant view is
 up: 70 ms shut, 70 ms open, then 3.6 s held open. It drives the same property
 the morph does, which is what makes switching back to the clock cancel it with
-no bookkeeping. _Avoid: wink, idle animation._
+no bookkeeping, and the pupil closes with it because the lids leave nothing
+between them. _Avoid: wink, idle animation._
+
+**Catchlight** — the amber dot in an eye's pupil, up and to the left in both
+eyes because there is one light in the room. Thirty per cent of the pupil and
+offset by a fifth of it, so a blink takes it along. It is small and it is most
+of what tells an eye from a dot. _Avoid: highlight, glint, sparkle, spark._
 
 **Cell** — the fixed advance every digit occupies in a generated font, 79 px
 in the 118 px face. `lv_font_conv` has no monospace switch, so `gen_fonts.py`
@@ -49,16 +55,17 @@ comes closer than 32 px to an edge of the panel. The 94 px group offset and the
 four corner readouts are derived from it, and it is what caps the digits at
 118 px. _Avoid: padding, inset, safe area._
 
-**Eye** — one of the two amber circles the assistant looks out of. Each starts
-life as its digit group's own box — same size, same centre, already round,
-invisible — so the morph is that box changing shape rather than a new thing
-appearing. _Avoid: pupil, iris, dot._
+**Eye** — one of the two amber circles the assistant looks out of, 69 px
+across, with a pupil and a catchlight in it. Each starts life as its digit
+group's own box — same size, same centre, already round, invisible — so the
+morph is that box changing shape rather than a new thing appearing. It is
+narrower than that box on purpose: what is left black between the two is what
+makes them read as a pair rather than as two discs. _Avoid: iris, dot, ball._
 
 **Gate** — the loudness a block of microphone audio has to clear to count as
 speech, and the 800 ms below it that ends a turn. Measured, not chosen: a
 quiet room reads a mean RMS of 42, speech runs in the thousands, and
-`VOICE_SILENCE_RMS` sits at 500 between them. _Avoid: VAD, threshold, endpoint
-detection._
+`VOICE_SILENCE_RMS` sits at 500 between them. _Avoid: VAD, threshold, endpoint detection._
 
 **Goodbye** — a word that ends the session and hands the watch back to the
 clock: `tschüss`, `quit`, `stop`, matched against the whole transcript so that
@@ -81,10 +88,15 @@ Also the half of any build that knows which of the two it is: window or panel,
 mouse or touch, `SDL_GetTicks` or `esp_timer`. _Avoid: PC, desktop, simulator
 side._
 
+**Lid** — the eye's own padding, `UI_EYE_LID`, 6 px on every side. Half the
+12 px the eye shuts to, so the top and bottom meet exactly as the blink bottoms
+out, and the pupil measured against what they leave is pinched out at the same
+moment. _Avoid: eyelid, inset, margin._
+
 **Morph** — the 400 ms change from one view to the other: the digits fade off
-while the box behind them grows square and round into an eye, and back again.
-It is the point of the project, and nothing here may foreclose it. _Avoid:
-transition, animation, morphing._
+while the box behind them pulls in square and round into an eye, and back
+again. It is the point of the project, and nothing here may foreclose it.
+_Avoid: transition, animation, morphing._
 
 **Panel** — the 410 x 502 AMOLED itself. The simulator window is the same size
 at 1:1, which is the whole reason the simulator is worth having. _Avoid:
@@ -95,6 +107,11 @@ directories of them: `ui/`, which may call LVGL and the C standard library,
 and `voice/`, which may call the C standard library and nothing else. Their
 opposite numbers are `host/` and `firmware/main/`, and there is no `src/`
 holding any of it. _Avoid: shared code, common, core._
+
+**Pupil** — the hole in an eye: a disc the colour of the background, half of
+what the lids leave between them. A percentage rather than a size of its own,
+which is what makes the morph and the blink carry it — nothing animates it
+directly, and nothing should. _Avoid: iris, hole, centre._
 
 **Reference clip** — `voices/kai.opus` and the transcript beside it, the
 recording the synthesiser borrows a voice from.

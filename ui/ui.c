@@ -75,8 +75,11 @@ LV_FONT_DECLARE(ui_font_assistant_18);
                              + UI_DATE_HEIGHT + UI_DATE_GAP \
                              + UI_WEEKDAY_HEIGHT / 2 - UI_PANEL_HEIGHT / 2)
 
-/* The eye an hour or minute group turns into, and how long it takes. */
-#define UI_EYE_SIZE 120
+/* The eye an hour or minute group turns into, and how long it takes. It is
+ * narrower than the group's own box on purpose: two discs the width of the
+ * digits read as two discs, and the black left between them is what makes the
+ * pair read as a face. */
+#define UI_EYE_SIZE 69
 #define UI_MORPH_MS 400
 
 /* The blink: the eye's height pulls in to a line and lets back out, then
@@ -84,6 +87,19 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 #define UI_EYE_SHUT_H     12
 #define UI_BLINK_MS       70
 #define UI_BLINK_PAUSE_MS 3600
+
+/* What is inside an eye, and what makes a disc one: a pupil with a catchlight
+ * in it. Both are percentages, so every animation here still drives nothing
+ * but the eye's own width and height.
+ *
+ * The percentage is of the eye's content box, and the lids are that box's
+ * padding — half the shut height each, so the two of them meet exactly as the
+ * blink bottoms out and the pupil is pinched to nothing instead of leaving a
+ * slit across the closed line. */
+#define UI_EYE_LID            (UI_EYE_SHUT_H / 2)
+#define UI_PUPIL_PCT          50
+#define UI_CATCHLIGHT_PCT     30 /* of the pupil */
+#define UI_CATCHLIGHT_OFF_PCT (-20)
 
 /* The corner readouts, in LVGL's built-in Montserrat because their symbols
  * come with it. A reading the platform does not have is dimmed, not hidden:
@@ -203,19 +219,52 @@ static lv_obj_t * stacked_create(lv_obj_t * parent, const lv_font_t * font,
     return label;
 }
 
+/* The eye, the pupil in it and the catchlight in that are the same object
+ * three times over. None of them is a touch target: the face is a thing to tap
+ * later, and a decoration that swallowed the tap would be in the way. */
+static lv_obj_t * disc_create(lv_obj_t * parent, int32_t w, int32_t h, uint32_t color)
+{
+    lv_obj_t * disc = lv_obj_create(parent);
+
+    lv_obj_remove_style_all(disc);
+    lv_obj_remove_flag(disc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(disc, w, h);
+    lv_obj_set_style_bg_color(disc, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(disc, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+    return disc;
+}
+
 /* An eye starts as the digit group's own box, invisible behind it, so the
- * morph is that box changing shape rather than a new thing appearing. */
+ * morph is that box changing shape rather than a new thing appearing.
+ *
+ * The pupil is a hole rather than a black disc — it is the background colour,
+ * so it follows one. It and the catchlight follow the eye down and back out
+ * for free, on the padding and the percentages above, and the whole of it
+ * fades on one opacity, the eye's, because LVGL scales a child by its
+ * parent's. So there is still one animation per property per eye. */
 static lv_obj_t * eye_create(lv_obj_t * parent, int32_t offset_x)
 {
-    lv_obj_t * eye = lv_obj_create(parent);
+    lv_obj_t * eye = disc_create(parent, UI_GROUP_WIDTH, UI_GROUP_HEIGHT, UI_COLOR_AMBER);
+    lv_obj_t * pupil;
+    lv_obj_t * catchlight;
 
-    lv_obj_remove_style_all(eye);
-    lv_obj_remove_flag(eye, LV_OBJ_FLAG_CLICKABLE); /* decoration, not a target */
-    lv_obj_set_size(eye, UI_GROUP_WIDTH, UI_GROUP_HEIGHT);
+    lv_obj_set_style_pad_all(eye, UI_EYE_LID, LV_PART_MAIN);
+
+    pupil = disc_create(eye, lv_pct(UI_PUPIL_PCT), lv_pct(UI_PUPIL_PCT), UI_COLOR_BG);
+    catchlight = disc_create(pupil, lv_pct(UI_CATCHLIGHT_PCT), lv_pct(UI_CATCHLIGHT_PCT),
+                             UI_COLOR_AMBER);
+
     lv_obj_align(eye, LV_ALIGN_CENTER, offset_x, UI_TIME_OFFSET_Y);
-    lv_obj_set_style_bg_color(eye, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(eye, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(eye, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_center(pupil);
+
+    /* One light in the room, so both eyes catch it in the same corner. Offset
+     * in percent for the same reason the sizes are: a blink has to take it
+     * with it rather than leave it sitting outside a shut eye. */
+    lv_obj_align(catchlight, LV_ALIGN_CENTER,
+                 lv_pct(UI_CATCHLIGHT_OFF_PCT), lv_pct(UI_CATCHLIGHT_OFF_PCT));
+
     lv_obj_set_style_opa(eye, LV_OPA_TRANSP, LV_PART_MAIN);
 
     return eye;

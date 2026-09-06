@@ -439,8 +439,21 @@ views — the corners are a status layer over whichever face is showing, and
 none of it stops mattering while the assistant is listening. The values arrive
 through `ui_status_set()` — see the host/device boundary above.
 
-**Assistant.** The same two groups, now the assistant's two eyes: 120 px amber
-circles in the same places, with the digits and the date faded out.
+**Assistant.** The same two groups, now the assistant's two eyes: 69 px amber
+circles in the same places, with the digits and the date faded out. Each holds
+a pupil — a hole the colour of the background, half of what the lids leave,
+28 px — and a catchlight in the pupil, 8 px, up and to the left in both because
+there is one light in the room. Neither is decoration: the pupil and the
+catchlight are what tell an eye from a dot, and two discs the width of the
+digit groups read as two discs.
+
+The eye is smaller than the gap it sits beside, and by some way — 69 px of eye
+with 119 px of black between the pair, where a face has roughly an eye's width
+between the two. That is a deliberate choice of look and not a derived number:
+closing it up would mean animating the eyes toward each other, and the morph
+moves nothing. Whatever the size, the check is the same and it only binds
+upwards — the gap must not fall below one eye's width, which is what a 120 px
+eye did.
 
 **Nothing on either face can be pressed.** Saying `Hey Kai` is what crosses
 over, and a goodbye or 30 s of nothing said is what comes back — see the voice
@@ -453,9 +466,15 @@ cannot swallow that tap.
 
 **The morph** takes 400 ms. Each eye is an `lv_obj` that starts as the digit
 group's own box — same size, same centre, `LV_RADIUS_CIRCLE`, invisible — so
-the switch is that box growing square while the digits fade off the front of
+the switch is that box pulling in square while the digits fade off the front of
 it. Nothing moves; only size and opacity animate, and `lv_obj_align` keeps
 each eye on its centre as it resizes.
+
+**The pupil and the catchlight are percentages, not animations.** LVGL sizes a
+child against its parent's content box and scales its opacity by its parent's,
+so both follow the eye down and back out and fade with it — there is still one
+animation per property per eye. Give either a size of its own and it sits there
+while the eye moves around it.
 
 **The blink** is one infinite animation per eye, started by the morph's own
 completion callback: the height pulls in to a 12 px line over 70 ms, back out
@@ -464,6 +483,12 @@ does, which is the point — `lv_anim_start` replaces an animation with the same
 object and callback, so switching back to the clock cancels the blink with no
 bookkeeping. It is also why that callback asks which view it is in before
 starting: it runs at the end of every eye resize, in both directions.
+
+**The lids are the eye's own padding**, 6 px a side — half the height it shuts
+to, so the two of them meet exactly as the blink bottoms out, and the pupil,
+being a percentage of what they leave between them, is pinched out at that same
+moment. Take the padding off and the eye closes to a line with a slit across
+it.
 
 This is why the two digit groups are **separate objects placed symmetrically
 about the centre**: they are the two eyes. Keep them independent — do not
@@ -661,15 +686,16 @@ it, and `make test` runs it: it creates a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
 `ui_build()`, steps a fake tick source, drives `ui_view_set()` the way
 `host/main.c` does, and checks geometry, opacity, label text and the pixels
-themselves. 83 checks. Seven of them have been made to fail on purpose:
-fading a corner readout out with the clock, putting the edge margin back to
-16, letting the eyes keep `LV_OBJ_FLAG_CLICKABLE`, leaving `UI_STACK_TOP`
-reserving the strip the button used to sit in, and three ways of getting
-`ui_view_set()` wrong — flipping which flag means which view, restarting the
-morph when told the view it is already in, and dropping the guard against
-being told anything before `ui_build()`, which takes the whole run down rather
-than printing a failure. Do that to any check you add — a check that has never
-failed is a check you have not tested.
+themselves. 93 checks. Fifteen of them have been made to fail on purpose,
+seven from before the eye got a pupil and eight since. The first seven: fading a corner
+readout out with the clock, putting the edge margin back to 16, letting the
+eyes keep `LV_OBJ_FLAG_CLICKABLE`, leaving `UI_STACK_TOP` reserving the strip
+the button used to sit in, and three ways of getting `ui_view_set()` wrong —
+flipping which flag means which view, restarting the morph when told the view
+it is already in, and dropping the guard against being told anything before
+`ui_build()`, which takes the whole run down rather than printing a failure. Do
+that to any check you add — a check that has never failed is a check you have
+not tested.
 
 The last two are worth knowing the shape of. The morph and the blink drive the
 same property, so a `ui_view_set()` that is not idempotent silently kills the
@@ -677,6 +703,19 @@ blink and nothing else — which is why the test re-asserts the view on *every*
 frame for nine seconds rather than twice in a row. And the missing `NULL`
 guard hangs rather than crashing: `LV_USE_LOG` is off and LVGL's assert
 handler is `while(1)`, so a broken run has to be given a watchdog.
+
+The other eight are the eye's, and were tried the same way: the eye back at
+120 px, which closes the gap between the pair, and the eye down at 40 px, which
+leaves a catchlight of 4 px that no longer reads as one; the pupil given a size
+of its own instead of a percentage, and the lids' padding taken off, which both
+leave it sitting in a shut eye; the pupil filled in amber rather than left as a
+hole; the catchlight removed, and the catchlight hung off the eye instead of
+the pupil; and the pupil left clickable, which would swallow the touch the eye
+lets through. The three of them that read pixels out of the buffer are the only
+checks here that can tell an eye from a dot — the geometry is the same either
+way, and those three probe points are derived from the eye's size rather than
+typed in, because a probe left behind at the old geometry lands on the wrong
+thing and still passes.
 
 Rebuild with the object removed when trying this:
 

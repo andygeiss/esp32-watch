@@ -30,7 +30,25 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 #define EDGE_MARGIN  32
 #define GROUP_WIDTH  158
 #define GROUP_HEIGHT 85
-#define EYE_SIZE     120
+#define EYE_SIZE     69
+#define EYE_LID      6  /* the eye's padding, half the height it shuts to */
+#define PUPIL_PCT    50 /* of what the lids leave, which is what makes the
+                           pupil close with the eye rather than sit in it */
+#define CATCHLIGHT_PCT     30 /* of the pupil */
+#define CATCHLIGHT_OFF_PCT (-20)
+
+/* What those work out to with the eye open. Derived rather than typed in, so
+ * that changing the eye's size moves the pixels this test looks at with it —
+ * a probe left behind at the old geometry lands on the wrong thing and still
+ * passes. Integer division truncates toward zero here exactly as it does in
+ * LVGL's own percentage arithmetic, so these are the same numbers. */
+#define PUPIL_SIZE      ((EYE_SIZE - 2 * EYE_LID) * PUPIL_PCT / 100)
+#define CATCHLIGHT_SIZE (PUPIL_SIZE * CATCHLIGHT_PCT / 100)
+#define CATCHLIGHT_OFF  (PUPIL_SIZE * CATCHLIGHT_OFF_PCT / 100)
+
+/* And what the amber 0xFFB000 of a lit pixel reads back as through RGB565 —
+ * see check_pixels. */
+#define AMBER_565 ((31 << 11) | (44 << 5))
 
 /* Children of the screen, in the order ui_build() creates them. Neither face
  * has a button on it: the platform hears the watch's name and says so through
@@ -84,6 +102,20 @@ static void pump(uint32_t ms)
 static lv_obj_t * child(int index)
 {
     return lv_obj_get_child(lv_screen_active(), index);
+}
+
+/* An eye holds a pupil and the pupil holds a catchlight, each its only child.
+ * They are what a disc needs to read as an eye, so the checks go at them. */
+static lv_obj_t * pupil_of(lv_obj_t * eye)
+{
+    return lv_obj_get_child(eye, 0);
+}
+
+/* One pixel of the last render, the way the panel would show it. */
+static uint16_t pixel_at(int32_t x, int32_t y)
+{
+    uint32_t i = (uint32_t) (y * PANEL_WIDTH + x);
+    return (uint16_t) (buf[i * 2] | (buf[i * 2 + 1] << 8));
 }
 
 static int32_t right_of(lv_obj_t * obj)
@@ -141,6 +173,11 @@ static void expect_assistant_view(const char * when)
           lv_obj_get_height(child(EYE_LEFT)) == EYE_SIZE,
           "%s: left eye is %dx%d, not %d square", when,
           lv_obj_get_width(child(EYE_LEFT)), lv_obj_get_height(child(EYE_LEFT)), EYE_SIZE);
+    CHECK(lv_obj_get_width(pupil_of(child(EYE_LEFT))) == PUPIL_SIZE &&
+          lv_obj_get_height(pupil_of(child(EYE_LEFT))) == PUPIL_SIZE,
+          "%s: the pupil is %dx%d, not %d square", when,
+          lv_obj_get_width(pupil_of(child(EYE_LEFT))),
+          lv_obj_get_height(pupil_of(child(EYE_LEFT))), PUPIL_SIZE);
 }
 
 /* Shortest the left eye gets over a stretch of time, and how often it got
@@ -149,11 +186,17 @@ static void expect_assistant_view(const char * when)
  * `saying` is a view to re-assert before every frame, or NULL for none. It is
  * how the poll main.c runs is reproduced here: ten times a second it hands
  * ui_view_set() the view the watch is already in, and if that restarts the
- * morph the eye never blinks again. */
-static int32_t watch_blinks(uint32_t ms, int * blinks, const bool * saying)
+ * morph the eye never blinks again.
+ *
+ * `pupil_shortest` takes the same reading off the pupil, or NULL for none.
+ * Nothing animates it, so the only thing that can bring it down is the eye
+ * closing over it. */
+static int32_t watch_blinks(uint32_t ms, int * blinks, const bool * saying,
+                            int32_t * pupil_shortest)
 {
     lv_obj_t * eye = child(EYE_LEFT);
     int32_t shortest = INT32_MAX;
+    int32_t pupil = INT32_MAX;
     int shut = 0;
     uint32_t t;
 
@@ -165,9 +208,11 @@ static int32_t watch_blinks(uint32_t ms, int * blinks, const bool * saying)
         lv_timer_handler();
         height = lv_obj_get_height(eye);
         if (height < shortest) shortest = height;
-        if (height < 60 && !shut) { shut = 1; (*blinks)++; }
-        if (height > 100) shut = 0;
+        if (lv_obj_get_height(pupil_of(eye)) < pupil) pupil = lv_obj_get_height(pupil_of(eye));
+        if (height < EYE_SIZE / 2 && !shut) { shut = 1; (*blinks)++; }
+        if (height > EYE_SIZE * 3 / 4) shut = 0;
     }
+    if (pupil_shortest != NULL) *pupil_shortest = pupil;
     return shortest;
 }
 
@@ -181,6 +226,11 @@ static void check_structure(void)
     CHECK(lv_obj_check_type(child(EYE_LEFT), &lv_obj_class), "left eye is not a plain object");
     CHECK(!lv_obj_has_flag(child(EYE_LEFT), LV_OBJ_FLAG_CLICKABLE),
           "the left eye is clickable and would swallow touches");
+    CHECK(lv_obj_get_child_count(child(EYE_LEFT)) == 1 &&
+          lv_obj_get_child_count(pupil_of(child(EYE_LEFT))) == 1,
+          "the left eye is not a pupil with a catchlight in it");
+    CHECK(!lv_obj_has_flag(pupil_of(child(EYE_LEFT)), LV_OBJ_FLAG_CLICKABLE),
+          "the pupil is clickable and would swallow the touch the eye lets through");
 }
 
 /* The layout rule: nothing comes closer than EDGE_MARGIN to an edge. */
@@ -331,7 +381,7 @@ static void check_pixels(void)
 int main(void)
 {
     int blinks;
-    int32_t shortest;
+    int32_t shortest, pupil_shortest;
     int32_t eye_centre_x, eye_centre_y;
 
     lv_init();
@@ -372,12 +422,54 @@ int main(void)
           opa_of(child(SPEAKER)) == LV_OPA_COVER && opa_of(child(MIC)) == LV_OPA_COVER,
           "a corner readout left with the clock; all four sit over both views");
 
+    /* An eye's width of black between the two of them. That proportion is what
+     * makes the pair read as a face; a bigger eye closes the gap up and they
+     * go back to being two discs sitting where the digits were. */
+    CHECK(lv_obj_get_x(child(EYE_RIGHT)) - right_of(child(EYE_LEFT)) - 1 >= EYE_SIZE,
+          "%d px of black between two %d px eyes",
+          lv_obj_get_x(child(EYE_RIGHT)) - right_of(child(EYE_LEFT)) - 1, EYE_SIZE);
+
+    /* And it has to be an eye, not a dot: a hole in an amber disc with a light
+     * caught in it. Only the pixels can say so — the geometry above is the
+     * same either way. */
+    {
+        int32_t cx = lv_obj_get_x(child(EYE_LEFT)) + EYE_SIZE / 2;
+        int32_t cy = lv_obj_get_y(child(EYE_LEFT)) + EYE_SIZE / 2;
+
+        /* Well inside the pupil and away from the catchlight; midway between
+         * the pupil's edge and the eye's, where only amber can be; and the
+         * middle of the catchlight itself. */
+        int32_t in_pupil = PUPIL_SIZE / 4;
+        int32_t on_amber = (EYE_SIZE / 2 + PUPIL_SIZE / 2) / 2;
+
+        lv_refr_now(display);
+        CHECK(pixel_at(cx + in_pupil, cy + in_pupil) == 0,
+              "the pupil is not a hole: 0x%04X in the middle of the eye",
+              pixel_at(cx + in_pupil, cy + in_pupil));
+        CHECK(pixel_at(cx, cy - on_amber) == AMBER_565,
+              "the amber around the pupil reads 0x%04X",
+              pixel_at(cx, cy - on_amber));
+        CHECK(pixel_at(cx + CATCHLIGHT_OFF, cy + CATCHLIGHT_OFF) == AMBER_565,
+              "no catchlight in the pupil: 0x%04X where it should be",
+              pixel_at(cx + CATCHLIGHT_OFF, cy + CATCHLIGHT_OFF));
+        CHECK(CATCHLIGHT_SIZE >= 6,
+              "the catchlight is down to %d px — too small to read as one",
+              CATCHLIGHT_SIZE);
+    }
+
     printf("blink\n");
-    shortest = watch_blinks(9000, &blinks, NULL);
+    shortest = watch_blinks(9000, &blinks, NULL, &pupil_shortest);
     CHECK(blinks >= 2, "%d blinks in 9 s", blinks);
     CHECK(shortest < 20, "the eye only closed to %d px", shortest);
     CHECK(lv_obj_get_height(child(EYE_LEFT)) == EYE_SIZE,
           "the eye did not open back to %d px", EYE_SIZE);
+
+    /* The lids meet on nothing. The pupil is a percentage of what they leave
+     * between them, so it is pinched out exactly as the eye reaches its shut
+     * height; one of its own would sit there as a slit across the closed
+     * line. */
+    CHECK(pupil_shortest == 0, "the eye shut to %d px with %d px of pupil still in it",
+          shortest, pupil_shortest);
 
     /* The same stretch again, with the view re-asserted on every frame the
      * way main.c's timer does. Being told the view it is already in has to
@@ -385,7 +477,7 @@ int main(void)
      * takes the blink down with it because both drive the eye's height. */
     {
         bool assistant = true;
-        watch_blinks(9000, &blinks, &assistant);
+        watch_blinks(9000, &blinks, &assistant, NULL);
         CHECK(blinks >= 2, "%d blinks in 9 s while the view was re-asserted every frame",
               blinks);
         expect_assistant_view("while the view was re-asserted every frame");
@@ -395,7 +487,7 @@ int main(void)
     pump(600);
     expect_clock_view("back on the clock");
 
-    shortest = watch_blinks(9000, &blinks, NULL);
+    shortest = watch_blinks(9000, &blinks, NULL, NULL);
     CHECK(blinks == 0, "the eye blinked %d times on the clock face", blinks);
     CHECK(shortest == GROUP_HEIGHT, "the eye box changed height on the clock face");
 
