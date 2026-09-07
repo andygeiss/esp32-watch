@@ -346,12 +346,12 @@ static char   wake_buf[VOICE_WAKE_BYTES];
 static char * wake_set[VOICE_WAKE_MAX];
 static size_t wake_n;
 
-static size_t wake_count(void)
+size_t voice_wake_count(void)
 {
     return wake_n != 0 ? wake_n : VOICE_COUNT(WAKE);
 }
 
-static const char * wake_at(size_t i)
+const char * voice_wake_at(size_t i)
 {
     return wake_n != 0 ? wake_set[i] : WAKE[i];
 }
@@ -426,8 +426,8 @@ const char * voice_after_wake(const char * heard)
 
     lower(heard, lowered, sizeof(lowered));
 
-    for (i = 0; i < wake_count(); i++) {
-        const char * phrase = wake_at(i);
+    for (i = 0; i < voice_wake_count(); i++) {
+        const char * phrase = voice_wake_at(i);
         const char * at = strstr(lowered, phrase);
         if (at == NULL) continue;
         at += strlen(phrase);

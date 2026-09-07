@@ -127,10 +127,22 @@ in `.env`, which `make run` sources and which is gitignored — a key compiled
 in is a key committed:
 
 ```sh
-# .env
-WATCH_VOICE_URL=https://omlx.ai-at-home.de   # http://127.0.0.1:8000 by default
-WATCH_VOICE_KEY=...                          # no key, no Authorization header
+cp .env.example .env    # then fill in the key
 ```
+
+`.env.example` is the whole list with every default written next to it;
+`.env` is gitignored because one of the lines is a secret.
+
+```sh
+WATCH_VOICE_URL="https://omlx.ai-at-home.de"   # http://127.0.0.1:8000 by default
+WATCH_VOICE_KEY="..."                          # no key, no Authorization header
+WATCH_WAKE_PHRASE="hey ada|hey adah|hi ada"    # empty is `Hey Kai` and five spellings
+```
+
+The quotes are not decoration. `make run` sources the file, so an unquoted
+value with a space or a `|` in it is not an assignment at all —
+`WATCH_WAKE_PHRASE=hey ada|hey adah` runs `ada` in a pipeline and leaves the
+variable holding `hey`. The start-up log says what the watch actually took.
 
 `WATCH_STT_MODEL`, `WATCH_BRAIN_MODEL`, `WATCH_TTS_MODEL`, `WATCH_LANGUAGE`
 and `WATCH_WAKE_PHRASE` are the rest of the list, and empty means the default

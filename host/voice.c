@@ -808,6 +808,15 @@ static bool configure(void)
     if (!voice_wake_set(env(VOICE_ENV_WAKE, NULL))) {
         SDL_Log("voice: that wake phrase does not fit — listening for the default");
     }
+    /* Said out loud because a phrase that did not fit and the default it was
+     * replaced by look identical from here on. */
+    if (voice_wake_count() == 1) {
+        SDL_Log("voice: answering to \"%s\"", voice_wake_at(0));
+    }
+    else {
+        SDL_Log("voice: answering to \"%s\" and %zu other spellings of it",
+                voice_wake_at(0), voice_wake_count() - 1);
+    }
 
     if (server.tls) {
         tls = SSL_CTX_new(TLS_client_method());

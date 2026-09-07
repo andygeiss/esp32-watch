@@ -200,6 +200,18 @@ size_t voice_turn_samples(const voice_turn_t * turn);
 bool voice_wake_set(const char * phrases);
 
 /**
+ * What the watch is actually listening for, configured or default. Each
+ * platform logs this at start-up, and it is the only way to tell a phrase
+ * that was taken from one that did not fit and was quietly replaced by the
+ * built-in list — the failure and the default look identical otherwise.
+ *
+ * The pointers are into this file's own storage; the next voice_wake_set()
+ * overwrites what they point at.
+ */
+size_t       voice_wake_count(void);
+const char * voice_wake_at(size_t i);
+
+/**
  * What was said after the watch's name, or NULL if its name is not in there.
  * An empty string means the name and nothing else. The returned pointer is
  * into `heard`.

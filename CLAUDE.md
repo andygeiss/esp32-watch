@@ -662,15 +662,38 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
 | `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
 
+**Both halves say what they took, at start-up, and the wake phrase is the one
+that needed saying.** A list that does not fit leaves the default in force, so
+a phrase that was rejected and a phrase that was never set look identical from
+then on — `answering to "hey ada" and 2 other spellings of it` is the line
+that tells them apart. `voice_wake_count()` and `voice_wake_at()` are in
+`turn.h` for it, the same reason `voice_models_get()` is.
+
 The key is the reason the host reads the environment rather than a header. A
 key compiled in is a key committed, and this repository is public; the rest
 follow it so that configuring the simulator is one kind of act and not two.
 `make run` sources `.env` and then inherits the shell, so either place works
 and `.env` is the one that survives a new terminal:
 
+    cp .env.example .env
+
+`.env.example` is checked in and carries the whole list with every default
+written beside it; `.env` is gitignored, because one of those lines is a
+secret. That pairing is the reason the example exists at all — a gitignored
+file is invisible to whoever clones next, and a setting nobody can see is a
+setting nobody uses.
+
     # .env — gitignored, one machine's setup
-    WATCH_VOICE_URL=https://omlx.ai-at-home.de
-    WATCH_VOICE_KEY=...
+    WATCH_VOICE_URL="https://omlx.ai-at-home.de"
+    WATCH_VOICE_KEY="..."
+    WATCH_WAKE_PHRASE="hey ada|hey adah|hi ada"
+
+**Quote every value in it.** `make run` sources the file, so an unquoted value
+holding a space or a `|` is not an assignment — `WATCH_WAKE_PHRASE=hey ada|hey
+adah` is a temporary assignment of `hey` in front of the command `ada`, piped
+into `hey adah`, and the variable is left empty. The `command not found: ada`
+that says so scrolls past in the middle of a build, and the wake phrase is the
+one setting likely to contain both characters. This cost an evening once.
 
 Neither half ever logs the key, only whether there is one. On the device it is
 compiled into the image, and anyone with the flash has it.

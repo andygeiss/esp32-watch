@@ -15,7 +15,8 @@ firmware/sdkconfig.old
 voices/
 
 # Where the speech server's address and its API key go, read by `make run`.
-# One machine's setup, and one of the four lines is a secret.
+# One machine's setup, and one of the lines is a secret. .env.example is the
+# same file without it, and is checked in — do not widen this to .env* .
 .env
 
 # clangd writes its index here as a side effect of compile_commands.json.

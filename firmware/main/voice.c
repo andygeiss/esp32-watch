@@ -496,6 +496,15 @@ static bool configure(void)
     if (!voice_wake_set(CONFIG_WATCH_WAKE_PHRASE)) {
         ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
     }
+    /* Said out loud because a phrase that did not fit and the default it was
+     * replaced by look identical from here on. */
+    if (voice_wake_count() == 1) {
+        ESP_LOGI(TAG, "answering to \"%s\"", voice_wake_at(0));
+    }
+    else {
+        ESP_LOGI(TAG, "answering to \"%s\" and %u other spellings of it",
+                 voice_wake_at(0), (unsigned) (voice_wake_count() - 1));
+    }
 
     /* The key is never logged, only whether there is one. */
     ESP_LOGI(TAG, "%s://%s:%s, %s key",
