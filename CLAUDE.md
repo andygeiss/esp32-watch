@@ -154,7 +154,7 @@ compile each portable directory alone and look at what it leaves undefined:
 
 `make check` runs exactly this, plus `-Wall -Wextra -Werror` on both compiles.
 Today `ui.o` leaves `lv_*` plus `time` and `localtime_r`, and `turn.o` leaves
-thirteen libc symbols and not one more — no LVGL, no sockets, no logging. Do
+twelve libc symbols and not one more — no LVGL, no sockets, no logging. Do
 not grep the sources for the string `SDL` instead — the file comments say the
 word, so it always false-positives.
 
@@ -327,6 +327,13 @@ so the built-in allocator's static pool cannot exist on the device. `lv_conf.h`
 switches `LV_USE_STDLIB_MALLOC` to `LV_STDLIB_CLIB` under `ESP_PLATFORM`, and
 `CONFIG_SPIRAM_USE_MALLOC` points the C library's `malloc` at the 8 MB of
 PSRAM.
+
+**The voice task's stack does not hold a transcript.** Two of them are
+`VOICE_MAX_TEXT` each, which was the whole of the task's original 8 kB before
+a single call was made — it would have smashed its stack on the first turn,
+and this firmware has never run on hardware, so nothing had said so. They are
+`static` in `loop()` instead, there being exactly one voice task, and the
+stack is 12 kB for `esp_http_client` and the TLS handshake under it.
 
 ### One task
 
@@ -662,6 +669,25 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
 | `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
 | `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
+
+**The transcript is cleaned the same way the phrase was, and for a while it
+was not.** `voice_wake_set()` strips case and ASCII punctuation from a phrase
+on the way in; `voice_after_wake()` used to `strstr()` that cleaned phrase in a
+transcript that still had all of its own. So `Hey, Lissi` — which is how a
+transcriber writes it as often as not — could never meet `hey lissi`, and a
+comma made the watch deaf to its own name. `wake_matches()` now compares in
+place, cleaning both sides as it goes: no second buffer, which also took
+`VOICE_MAX_TEXT` off a stack that had two of them.
+
+**A transcript the watch decides is not for it is logged, not dropped.** The
+transcriber has never been shown this name and writes down whatever sounded
+closest, so choosing the spellings to listen for means reading what it
+actually produced — `not for me: "Halusy."` is the line that makes that
+possible, and its absence is what made a watch that would not wake impossible
+to diagnose. Some names are simply not heard: spoken through the synthesiser
+and transcribed back, `Hey Lissi` came out as `Halusy` and as nothing at all,
+while `Hey Lisi` came back exactly. No wake list can recover a greeting the
+transcriber did not write down.
 
 **The name and the wake phrase are two settings, and that is deliberate.**
 The wake list is what the *transcriber* writes down for a name it has never

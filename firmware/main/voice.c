@@ -61,9 +61,16 @@
 
 static const char * TAG = "voice";
 
-/* The task. A turn holds a 640 kB recording and builds a body around it, so
- * the stack only has to carry the transcript and the odd struct. */
-#define VOICE_TASK_STACK 8192
+/* The task. A turn's recording and its bodies are all in PSRAM, so what is
+ * left for the stack is esp_http_client and the TLS handshake under it, which
+ * want several kilobytes between them.
+ *
+ * The two transcripts are not on it. They are VOICE_MAX_TEXT each, which is
+ * the whole of the old 8 kB before a single call was made — the task would
+ * have smashed its stack on its first turn, and this firmware has never run
+ * on hardware, so nothing had said so yet. They are static below instead:
+ * there is exactly one voice task, so there is exactly one of each. */
+#define VOICE_TASK_STACK 12288
 #define VOICE_TASK_PRIO  4
 
 /* Long enough for the synthesiser, which takes about as long as the speech it
@@ -370,8 +377,11 @@ static void loop(void * unused)
     (void) unused;
 
     while (atomic_load(&running)) {
-        char heard[VOICE_MAX_TEXT];
-        char answer[VOICE_MAX_TEXT];
+        /* Static, not automatic: 8 kB of transcripts do not fit on a task
+         * stack that also has to carry a TLS handshake. One task, one of
+         * each — see VOICE_TASK_STACK. */
+        static char heard[VOICE_MAX_TEXT];
+        static char answer[VOICE_MAX_TEXT];
         voice_buf_t wav = { 0 };
         const char * say;
         size_t samples;
@@ -404,7 +414,15 @@ static void loop(void * unused)
 
         if (!atomic_load(&awake)) {
             const char * rest = voice_after_wake(heard);
-            if (rest == NULL) continue; /* the room talking, not the watch */
+            if (rest == NULL) {
+                /* The room talking, not the watch. Logged rather than
+                 * dropped: choosing which spellings to listen for means
+                 * reading what the transcriber actually produced, and silence
+                 * here is what makes a watch that will not wake impossible to
+                 * diagnose. */
+                ESP_LOGI(TAG, "not for me: \"%s\"", heard);
+                continue;
+            }
             ESP_LOGI(TAG, "woken by \"%s\"", heard);
             atomic_store(&awake, true);
             if (*rest == '\0') continue; /* its name and nothing after it */

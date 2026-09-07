@@ -228,7 +228,7 @@ bool voice_models_set(const voice_models_t * models)
      * caller can ask the same short question. sizeof takes the terminator in
      * with it, which makes this an equality test rather than a prefix one —
      * and it is strncmp because strcmp would be a fourteenth undefined symbol
-     * in a file whose thirteen are a checked list. */
+     * in a file whose twelve are a checked list. */
     if (strncmp(brain_model, VOICE_BRAIN_ECHO, sizeof VOICE_BRAIN_ECHO) == 0) {
         brain_model[0] = '\0';
     }
@@ -347,17 +347,18 @@ static const char * const GOODBYE[] = {
 
 #define VOICE_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
-/* Lower-cases byte for byte, so every offset into the copy is an offset into
- * the original. Only ASCII moves: the ü of tschüss is two bytes above 127 and
- * comes through untouched, which is what the table above is written for. */
-static void lower(const char * in, char * out, size_t cap)
+/* True when the n bytes at `a` are `b`, comparing case-blind. Only ASCII
+ * folds: the ü of tschüss is two bytes above 127 and comes through untouched,
+ * which is what the tables above are written for. `b` is already lower case —
+ * every phrase in this file and every phrase voice_wake_set() cleaned is. */
+static bool same_folded(const char * a, const char * b, size_t n)
 {
     size_t i;
 
-    for (i = 0; i + 1 < cap && in[i] != '\0'; i++) {
-        out[i] = (char) tolower((unsigned char) in[i]);
+    for (i = 0; i < n; i++) {
+        if ((char) tolower((unsigned char) a[i]) != b[i]) return false;
     }
-    out[i] = '\0';
+    return true;
 }
 
 /* The configured spellings, cleaned, laid end to end in one static buffer.
@@ -439,47 +440,91 @@ bool voice_wake_set(const char * phrases)
     return true;
 }
 
+/* Matches `phrase` against `heard` from `at`, cleaning the transcript on the
+ * way the same way voice_wake_set() cleaned the phrase: ASCII case folded,
+ * ASCII punctuation dropped, a run of spaces collapsed to one. Answers the
+ * offset in `heard` just past the match, or 0 for no match here.
+ *
+ * Cleaning both sides is the whole job. The phrase was cleaned on the way in
+ * and the transcript never was, so "Hey, Lissi" — which is how a transcriber
+ * writes it as often as not, and "Hey Kai," at the end of a sentence even
+ * more often — could never meet "hey lissi". A comma made the watch deaf to
+ * its own name.
+ *
+ * It compares in place rather than cleaning into a buffer, which is why it
+ * takes an offset instead of a string. The buffer would have been another
+ * VOICE_MAX_TEXT on a stack that has two of them already, and the device runs
+ * this inside a task with 8 kB. */
+static size_t wake_matches(const char * heard, size_t at, const char * phrase)
+{
+    size_t p = 0;
+
+    while (phrase[p] != '\0') {
+        unsigned char c;
+
+        for (;;) { /* to the next byte the phrase could have kept */
+            c = (unsigned char) heard[at];
+            if (c == '\0') return 0;
+            if (wake_keep(c)) break;
+            at++;
+        }
+
+        if (c == ' ') {
+            /* One space stands for any run of them and anything droppable
+             * caught between: ", " and "  " are both one. */
+            while (heard[at] != '\0' &&
+                   (heard[at] == ' ' || !wake_keep((unsigned char) heard[at]))) {
+                at++;
+            }
+            if (phrase[p] != ' ') return 0;
+            p++;
+            continue;
+        }
+
+        if ((char) tolower(c) != phrase[p]) return 0;
+        at++;
+        p++;
+    }
+    return at;
+}
+
 const char * voice_after_wake(const char * heard)
 {
-    char lowered[VOICE_MAX_TEXT];
-    const char * rest = NULL;
+    size_t best = 0;
     size_t i;
 
-    lower(heard, lowered, sizeof(lowered));
+    /* The earliest end of any spelling, so "Hey Kai, hey Kai, hallo" answers
+     * the whole of what came after the first one. */
+    for (i = 0; heard[i] != '\0'; i++) {
+        size_t j;
 
-    for (i = 0; i < voice_wake_count(); i++) {
-        const char * phrase = voice_wake_at(i);
-        const char * at = strstr(lowered, phrase);
-        if (at == NULL) continue;
-        at += strlen(phrase);
-        if (rest == NULL || at < rest) rest = at;
+        for (j = 0; j < voice_wake_count(); j++) {
+            size_t end = wake_matches(heard, i, voice_wake_at(j));
+            if (end != 0 && (best == 0 || end < best)) best = end;
+        }
     }
-    if (rest == NULL) return NULL;
+    if (best == 0) return NULL;
 
-    rest = heard + (rest - lowered); /* lower() kept the offsets */
-    while (*rest == ' ' || *rest == ',' || *rest == '.' ||
-           *rest == '!' || *rest == '?') {
-        rest++;
+    heard += best;
+    while (*heard == ' ' || *heard == ',' || *heard == '.' ||
+           *heard == '!' || *heard == '?') {
+        heard++;
     }
-    return rest;
+    return heard;
 }
 
 bool voice_is_goodbye(const char * heard)
 {
-    char lowered[VOICE_MAX_TEXT];
-    const char * word = lowered;
     size_t len, i;
 
-    lower(heard, lowered, sizeof(lowered));
-
-    while (*word == ' ') word++;
-    for (len = strlen(word); len > 0; len--) {
-        char c = word[len - 1];
+    while (*heard == ' ') heard++;
+    for (len = strlen(heard); len > 0; len--) {
+        char c = heard[len - 1];
         if (c != ' ' && c != ',' && c != '.' && c != '!' && c != '?') break;
     }
 
     for (i = 0; i < VOICE_COUNT(GOODBYE); i++) {
-        if (strlen(GOODBYE[i]) == len && strncmp(word, GOODBYE[i], len) == 0) return true;
+        if (strlen(GOODBYE[i]) == len && same_folded(heard, GOODBYE[i], len)) return true;
     }
     return false;
 }

@@ -676,7 +676,16 @@ static int loop(void * unused)
 
         if (!SDL_AtomicGet(&awake)) {
             const char * rest = voice_after_wake(heard);
-            if (rest == NULL) continue; /* the room talking, not the watch */
+            if (rest == NULL) {
+                /* The room talking, not the watch. Logged rather than
+                 * dropped: the transcriber has never been shown this name and
+                 * writes down whatever sounded closest, so choosing the
+                 * spellings to listen for means reading what it actually
+                 * produced. Silence here is what makes a watch that will not
+                 * wake impossible to diagnose. */
+                SDL_Log("voice: not for me: \"%s\"", heard);
+                continue;
+            }
             SDL_Log("voice: woken by \"%s\"", heard);
             SDL_AtomicSet(&awake, 1);
             if (*rest == '\0') continue; /* its name and nothing after it */
