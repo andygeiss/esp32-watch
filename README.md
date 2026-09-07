@@ -120,7 +120,10 @@ make run
 ```
 
 `lvgl/` is gitignored, so a fresh clone needs that one command. The assistant
-speaks once `voices/kai.opus` and `voices/kai.txt` are in place — the
+speaks once `voices/female.wav` and `voices/female.txt` are in place —
+`tools/gen_voice.sh` makes them from macOS's own German voice, because a
+reference clip is a voice to be cloned and so has to be one nobody minds
+cloning. The
 synthesiser has no voice of its own and clones that clip; without them the
 watch runs and the two bottom corners stay dim. Point it at a speech server
 in `.env`, which `make run` sources and which is gitignored — a key compiled
@@ -177,7 +180,7 @@ WiFi, SNTP and the assistant are off until you configure them — `idf.py -C
 firmware menuconfig`, under **ESP32 Watch**. The board has no RTC, so without an
 SSID the clock counts from reset and the WiFi corner draws dim, which is the
 reading that dimming is for. The assistant needs that SSID, a speech server
-URL it can reach, and `voices/kai.opus` in the tree when the firmware is
+URL it can reach, and `voices/female.wav` in the tree when the firmware is
 built; without any one of them the watch is a clock. `CONFIG_WATCH_VOICE_URL`
 takes a whole address — `https://omlx.ai-at-home.de` goes through TLS against
 the certificate bundle ESP-IDF compiles in, `http://192.168.1.20:8000` does

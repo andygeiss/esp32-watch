@@ -48,9 +48,9 @@
  *   http:// address skips all of this.
  *
  * - **chatterbox-multilingual-v3 ships no voice conditionals**, so it answers
- *   500 to every request that carries no clip to clone. voices/kai.opus and
- *   the transcript beside it are what it borrows a voice from, they are
- *   gitignored, and without them the loop stays quiet rather than failing —
+ *   500 to every request that carries no clip to clone. the clip named by
+ *   WATCH_VOICE_CLIP and the transcript beside it are what it borrows a voice
+ *   from, they are gitignored, and without them the loop stays quiet —
  *   the same choice the firmware makes about an unconfigured SSID.
  */
 
@@ -95,11 +95,16 @@
 #define VOICE_URL_DEFAULT "http://127.0.0.1:8000"
 
 
-/* The voice KAI borrows, relative to the working directory — `make run`
- * starts the binary from the repository root. Both are gitignored: the clip
- * is a recording of a person, and this repository is licensed. */
-#define VOICE_REF_AUDIO "voices/kai.opus"
-#define VOICE_REF_TEXT  "voices/kai.txt"
+/* The clip whose voice the assistant borrows, relative to the working
+ * directory — `make run` starts the binary from the repository root. Its
+ * words are read from the .txt beside it, which is the convention the Go
+ * orchestrator uses for the same pair: one path to configure, and a
+ * transcript that cannot be pointed at the wrong recording.
+ *
+ * voices/ is gitignored, so a fresh clone has neither and the watch is a
+ * clock until one is put there. tools/gen_voice.sh makes the default. */
+#define VOICE_ENV_CLIP    "WATCH_VOICE_CLIP"
+#define VOICE_CLIP_DEFAULT "voices/female.wav"
 
 /* Transcription answers in about a second, a chat model in several, and
  * synthesis takes roughly as long as the speech it produces, so the budget is
@@ -715,6 +720,16 @@ static int loop(void * unused)
 /* Start-up.                                                                  */
 /* ------------------------------------------------------------------ */
 
+/* One setting, or the fallback when it is unset or empty. Empty is treated as
+ * unset throughout: an exported variable someone cleared should mean the same
+ * as one they never wrote. */
+static const char * env(const char * name, const char * fallback)
+{
+    const char * value = getenv(name);
+
+    return (value != NULL && value[0] != '\0') ? value : fallback;
+}
+
 /* The whole of a file, NUL-terminated, or NULL. */
 static unsigned char * slurp(const char * path, size_t * len)
 {
@@ -748,23 +763,45 @@ static unsigned char * slurp(const char * path, size_t * len)
 /* Reads the clip KAI borrows its voice from. Without it the synthesiser
  * answers 500 to everything, so the loop simply does not start — the same
  * answer the firmware gives an unconfigured SSID. */
+/* The transcript beside a clip: the same path with its extension replaced by
+ * .txt. Written into `out` because the caller wants both names for its log. */
+static void beside(const char * clip, char * out, size_t cap)
+{
+    size_t len = strlen(clip);
+    size_t cut = len;
+
+    while (cut > 0 && clip[cut - 1] != '.' && clip[cut - 1] != '/') cut--;
+    if (cut == 0 || clip[cut - 1] == '/') cut = len; /* no extension to replace */
+    else cut--;
+
+    if (cut + 5 > cap) cut = cap > 5 ? cap - 5 : 0;
+    memcpy(out, clip, cut);
+    memcpy(out + cut, ".txt", 5);
+}
+
 static bool load_voice(void)
 {
+    const char * clip_path = env(VOICE_ENV_CLIP, VOICE_CLIP_DEFAULT);
+    char text_path[512];
     size_t clip_len = 0;
-    unsigned char * clip = slurp(VOICE_REF_AUDIO, &clip_len);
+    unsigned char * clip;
     unsigned char * words;
     size_t i;
 
+    beside(clip_path, text_path, sizeof text_path);
+
+    clip = slurp(clip_path, &clip_len);
     if (clip == NULL) {
-        SDL_Log("voice: no %s — the assistant stays asleep", VOICE_REF_AUDIO);
+        SDL_Log("voice: no %s — the assistant stays asleep", clip_path);
         return false;
     }
-    words = slurp(VOICE_REF_TEXT, NULL);
+    words = slurp(text_path, NULL);
     if (words == NULL) {
-        SDL_Log("voice: no %s — the clip's words are needed too", VOICE_REF_TEXT);
+        SDL_Log("voice: no %s — the clip's words are needed too", text_path);
         free(clip);
         return false;
     }
+    SDL_Log("voice: borrowing a voice from %s, %zu kB", clip_path, clip_len / 1024);
 
     /* The transcript is a line in a file, so it arrives with a newline on it. */
     for (i = strlen((char *) words); i > 0; i--) {
@@ -776,16 +813,6 @@ static bool load_voice(void)
     ref_text = (char *) words;
     free(clip);
     return ref_audio != NULL;
-}
-
-/* One setting, or the fallback when it is unset or empty. Empty is treated as
- * unset throughout: an exported variable someone cleared should mean the same
- * as one they never wrote. */
-static const char * env(const char * name, const char * fallback)
-{
-    const char * value = getenv(name);
-
-    return (value != NULL && value[0] != '\0') ? value : fallback;
 }
 
 /* Everything the platform knows and turn.c does not: where the server is,

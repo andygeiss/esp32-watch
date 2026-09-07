@@ -28,7 +28,7 @@
  *   is a network; a server, so there is somewhere to ask; and the reference
  *   clip compiled in, so the synthesiser has a voice to borrow. Any of them
  *   missing and the watch is a clock and nothing else — the same answer the
- *   simulator gives when voices/kai.opus is not there.
+ *   simulator gives when voices/female.wav is not there.
  *
  * - **The answer comes from a chat model when one is configured**, and is the
  *   question said back when none is. The echo needs no third service and is
@@ -80,15 +80,15 @@ static const char * TAG = "voice";
 /* One block of microphone audio, the unit the gate in turn.c works in. */
 #define VOICE_BLOCK_SAMPLES ((size_t) VOICE_RATE * VOICE_BLOCK_MS / 1000)
 
-/* The clip KAI borrows its voice from, linked in by main/CMakeLists.txt when
- * voices/kai.opus is in the tree. It is gitignored — a recording of a person
- * in a licensed repository — so a fresh clone builds without it and the watch
- * simply never speaks. */
+/* The clip the assistant borrows its voice from, linked in by
+ * main/CMakeLists.txt when voices/female.wav is in the tree. voices/ is
+ * gitignored, so a fresh clone builds without it and the watch simply never
+ * speaks. */
 #if CONFIG_WATCH_HAS_VOICE
-extern const uint8_t kai_opus_start[] asm("_binary_kai_opus_start");
-extern const uint8_t kai_opus_end[]   asm("_binary_kai_opus_end");
-extern const uint8_t kai_txt_start[]  asm("_binary_kai_txt_start");
-extern const uint8_t kai_txt_end[]    asm("_binary_kai_txt_end");
+extern const uint8_t clip_start[]  asm("_binary_female_wav_start");
+extern const uint8_t clip_end[]    asm("_binary_female_wav_end");
+extern const uint8_t words_start[] asm("_binary_female_txt_start");
+extern const uint8_t words_end[]   asm("_binary_female_txt_end");
 #endif
 
 static atomic_bool awake;     /* the name has been heard, the goodbye has not */
@@ -456,33 +456,33 @@ static void loop(void * unused)
 /* Start-up.                                                                  */
 /* ------------------------------------------------------------------ */
 
-/* Reads the clip KAI borrows its voice from, out of flash. Without it the
+/* Reads the clip the assistant borrows its voice from, out of flash. Without it the
  * synthesiser answers 500 to everything, so the loop simply does not start —
  * the same answer this firmware gives an unconfigured SSID. */
 static bool load_voice(void)
 {
 #if CONFIG_WATCH_HAS_VOICE
-    size_t clip_len = (size_t) (kai_opus_end - kai_opus_start);
-    size_t words_len = (size_t) (kai_txt_end - kai_txt_start);
+    size_t clip_len = (size_t) (clip_end - clip_start);
+    size_t words_len = (size_t) (words_end - words_start);
 
-    ref_audio = voice_base64(kai_opus_start, clip_len);
+    ref_audio = voice_base64(clip_start, clip_len);
     if (ref_audio == NULL) return false;
 
     /* The transcript is a line in a file, so it arrives with a newline on it. */
     while (words_len > 0) {
-        char last = (char) kai_txt_start[words_len - 1];
+        char last = (char) words_start[words_len - 1];
         if (last != '\n' && last != '\r' && last != ' ') break;
         words_len--;
     }
     ref_text = psram_grow(NULL, words_len + 1);
     if (ref_text == NULL) return false;
-    memcpy(ref_text, kai_txt_start, words_len);
+    memcpy(ref_text, words_start, words_len);
     ref_text[words_len] = '\0';
 
     ESP_LOGI(TAG, "the voice to borrow is %u bytes of opus", (unsigned) clip_len);
     return true;
 #else
-    ESP_LOGW(TAG, "built without voices/kai.opus — the assistant stays asleep");
+    ESP_LOGW(TAG, "built without voices/female.wav — the assistant stays asleep");
     return false;
 #endif
 }

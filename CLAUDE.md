@@ -202,7 +202,8 @@ an x86 install and is wrong for this machine):
     brew install cmake pkg-config sdl2
 
 The simulator runs without it, but the assistant only speaks once
-`voices/kai.opus` and `voices/kai.txt` are in place — see the voice loop
+`voices/female.wav` and `voices/female.txt` are in place —
+`tools/gen_voice.sh` makes them, and the voice loop
 below. `make run` starts the binary from the repository root, which is where
 those paths are relative to.
 
@@ -669,6 +670,7 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
 | `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
 | `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
+| `WATCH_VOICE_CLIP` | fixed at `voices/female.wav` | `voices/female.wav`, transcript from the `.txt` beside it |
 
 **The transcript is cleaned the same way the phrase was, and for a while it
 was not.** `voice_wake_set()` strips case and ASCII punctuation from a phrase
@@ -762,19 +764,39 @@ this server it has the same problem.
 
 Five things about it are load-bearing:
 
-- **`chatterbox-multilingual-v3` ships no voice conditionals.** It answers
-  `500` — *"No conditionals available"* — to every request that carries no clip
-  to clone, so `voices/kai.opus` and its transcript in `voices/kai.txt` are not
-  optional. They are gitignored: the clip is a recording of a person and this
-  repository is licensed. Copy them from
-  `~/workspace/kai/orchestrator/voices/`. Without them the loop does not start
+- **`chatterbox-multilingual-v3` ships no voice conditionals.** Measured, not
+  assumed: `/v1/audio/voices?model=chatterbox-multilingual-v3` answers
+  `{"voices":[]}`, and a synthesis request carrying no clip answers `500` —
+  *"No conditionals available. Either provide audio_prompt/audio_prompt_sr for
+  voice cloning, or ensure conds.safetensors is in the model directory."*
+  Naming a voice changes nothing, because there are none to name. So
+  `voices/female.wav` and its transcript in `voices/female.txt` are not
+  optional. `tools/gen_voice.sh` makes them. Without them the loop does not start
   at all: the watch is a clock, saying its name does nothing because nothing
   is listening for it, and the two corners stay dim. **The firmware links the
   same two files into flash** — `main/CMakeLists.txt` does that only
-  `if(EXISTS ...)`, so a fresh clone builds without them and says so
-  (`KAI: no voices/kai.opus`) rather than failing.
+  `if(EXISTS ...)`, and by a fixed name: the linker symbol is derived from
+  the file name, so on the device "which clip" is a build-time fact, so a fresh clone builds without them and says so
+  (`WATCH: no voices/female.wav`) rather than failing.
 - **The clip and its words travel together.** The server aligns one against
-  the other and rejects the audio on its own.
+  the other and rejects the audio on its own. Which is why the transcript is
+  the `.txt` beside the clip rather than a setting of its own — one path to
+  configure, and no way to point a transcript at the wrong recording.
+
+- **The clip is generated, not found, and that is the point.** A reference
+  clip is a voice to be cloned, so a recording of someone who did not agree to
+  that is not a candidate — a working voice actor's demo reel least of all,
+  since their voice is the thing they sell. `tools/gen_voice.sh` speaks the
+  words in this repository through macOS's own German voice Anna, which is
+  synthetic and already on the machine.
+
+- **Keep it to about five seconds.** It travels base64 in the body of every
+  reply, so its length is paid for on every turn: 5.1 s is 162 kB of WAV and
+  217 kB on the wire, where 8.2 s was 351 kB. `gen_voice.sh` says the duration
+  and warns past six seconds. A longer clip does condition slightly better —
+  the eight-second one transcribed back word-perfect where the five-second one
+  turned *Viertel nach zehn* into *vierte Nacht zehn* — so this is a trade
+  rather than a free win.
 - **16 kHz mono in, whatever comes back out.** `sdl2-compat` opens the
   microphone at exactly 16 kHz mono with no resampling, and nothing here
   resamples, so a device that will not open at that rate is refused rather

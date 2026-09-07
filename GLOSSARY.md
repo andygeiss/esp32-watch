@@ -123,7 +123,7 @@ what the lids leave between them. A percentage rather than a size of its own,
 which is what makes the morph and the blink carry it — nothing animates it
 directly, and nothing should. _Avoid: iris, hole, centre._
 
-**Reference clip** — `voices/kai.opus` and the transcript beside it, the
+**Reference clip** — `voices/female.wav` and the transcript beside it, the
 recording the synthesiser borrows a voice from.
 `chatterbox-multilingual-v3` ships no voices of its own and answers 500
 without one, so it is a prerequisite rather than a setting. Gitignored: it is

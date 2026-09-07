@@ -121,7 +121,7 @@ int main(void)
 
     /* There is nothing to press: the loop listens for the watch's name from
      * the moment it starts, and saying it is what morphs the digits into
-     * eyes. Without voices/kai.opus the loop never starts, so the watch stays
+     * eyes. Without voices/female.wav the loop never starts, so the watch stays
      * a clock and the two bottom corners stay dim.
      *
      * LV_SDL_DIRECT_EXIT means closing the window calls exit() from inside
