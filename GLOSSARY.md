@@ -164,7 +164,7 @@ every utterance is transcribed, and the phrase is looked for in the text —
 `WAKE` in `voice/turn.c` is a table because the transcriber has never been
 shown the name and spells it several ways. Whatever follows it is the first
 turn. The phrase is configuration and the table is its default:
-`VOICE_WAKE_PHRASE` on the host and `CONFIG_KAI_WAKE_PHRASE` on the device
+`VOICE_WAKE_PHRASE` on the host and `CONFIG_WATCH_WAKE_PHRASE` on the device
 hand `voice_wake_set()` a `|`-separated list, and an empty one means the
 table. On the watch the transcriber-as-wake-word is a choice rather than a
 necessity: ESP-SR would hear it locally, but none of WakeNet's models is this

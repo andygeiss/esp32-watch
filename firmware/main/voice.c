@@ -71,7 +71,7 @@ static const char * TAG = "voice";
  * voices/kai.opus is in the tree. It is gitignored — a recording of a person
  * in a licensed repository — so a fresh clone builds without it and the watch
  * simply never speaks. */
-#if CONFIG_KAI_HAS_VOICE
+#if CONFIG_WATCH_HAS_VOICE
 extern const uint8_t kai_opus_start[] asm("_binary_kai_opus_start");
 extern const uint8_t kai_opus_end[]   asm("_binary_kai_opus_end");
 extern const uint8_t kai_txt_start[]  asm("_binary_kai_txt_start");
@@ -124,7 +124,7 @@ static bool http_post(const char * path, const char * content_type,
     bool ok = false;
 
     snprintf(url, sizeof(url), "http://%s:%d%s",
-             CONFIG_KAI_VOICE_HOST, CONFIG_KAI_VOICE_PORT, path);
+             CONFIG_WATCH_VOICE_HOST, CONFIG_WATCH_VOICE_PORT, path);
     config.url = url;
     config.method = HTTP_METHOD_POST;
     config.timeout_ms = VOICE_HTTP_TIMEOUT_MS;
@@ -390,7 +390,7 @@ static void loop(void * unused)
  * the same answer this firmware gives an unconfigured SSID. */
 static bool load_voice(void)
 {
-#if CONFIG_KAI_HAS_VOICE
+#if CONFIG_WATCH_HAS_VOICE
     size_t clip_len = (size_t) (kai_opus_end - kai_opus_start);
     size_t words_len = (size_t) (kai_txt_end - kai_txt_start);
 
@@ -423,11 +423,11 @@ void voice_start(void)
      * total. */
     voice_buf_alloc(&PSRAM);
 
-    if (!voice_wake_set(CONFIG_KAI_WAKE_PHRASE)) {
+    if (!voice_wake_set(CONFIG_WATCH_WAKE_PHRASE)) {
         ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
     }
 
-    if (CONFIG_KAI_VOICE_HOST[0] == '\0') {
+    if (CONFIG_WATCH_VOICE_HOST[0] == '\0') {
         ESP_LOGW(TAG, "no server configured — the watch stays a clock");
         return;
     }

@@ -69,10 +69,10 @@ static void nvs_start(void)
 void net_start(void)
 {
     /* Always, radio or not: without it localtime_r() would hand ui.c UTC. */
-    setenv("TZ", CONFIG_KAI_TIMEZONE, 1);
+    setenv("TZ", CONFIG_WATCH_TIMEZONE, 1);
     tzset();
 
-    if (CONFIG_KAI_WIFI_SSID[0] == '\0') {
+    if (CONFIG_WATCH_WIFI_SSID[0] == '\0') {
         ESP_LOGI(TAG, "no SSID set: radio stays off, clock runs from boot");
         return;
     }
@@ -90,8 +90,8 @@ void net_start(void)
                                                         on_event, NULL, NULL));
 
     wifi_config_t config = { 0 };
-    strlcpy((char *) config.sta.ssid, CONFIG_KAI_WIFI_SSID, sizeof config.sta.ssid);
-    strlcpy((char *) config.sta.password, CONFIG_KAI_WIFI_PASSWORD, sizeof config.sta.password);
+    strlcpy((char *) config.sta.ssid, CONFIG_WATCH_WIFI_SSID, sizeof config.sta.ssid);
+    strlcpy((char *) config.sta.password, CONFIG_WATCH_WIFI_PASSWORD, sizeof config.sta.password);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
@@ -99,10 +99,10 @@ void net_start(void)
 
     /* SNTP starts here and waits for the association by itself, then keeps
      * the clock honest for as long as the watch is up. */
-    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_KAI_SNTP_SERVER);
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_WATCH_SNTP_SERVER);
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
 
-    ESP_LOGI(TAG, "joining %s", CONFIG_KAI_WIFI_SSID);
+    ESP_LOGI(TAG, "joining %s", CONFIG_WATCH_WIFI_SSID);
 }
 
 bool net_is_up(void)

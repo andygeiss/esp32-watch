@@ -559,7 +559,7 @@ in one go.
 
 **The phrase is configuration, and `Hey Kai` is its default.** The platform
 hands `voice_wake_set()` a `|`-separated list of spellings at start-up —
-`VOICE_WAKE_PHRASE` in `host/voice.c`, `CONFIG_KAI_WAKE_PHRASE` on the device
+`VOICE_WAKE_PHRASE` in `host/voice.c`, `CONFIG_WATCH_WAKE_PHRASE` on the device
 — which is the crossing the server address already makes. An empty list means
 `WAKE` itself, so those six spellings stay written down exactly once and a
 platform that wants them says nothing rather than repeating them. Case and
@@ -673,7 +673,7 @@ Five things about it are load-bearing:
 **The watch needs three things before it says a word**: an SSID, a server
 address, and that clip. All three are off by default and each one missing
 gives the same answer — a clock with two dim corners. `idf.py -C firmware
-menuconfig`, under **ESP32 Watch**: `CONFIG_KAI_VOICE_HOST` is an address *on
+menuconfig`, under **ESP32 Watch**: `CONFIG_WATCH_VOICE_HOST` is an address *on
 the network the watch joins*, not `127.0.0.1`, which on the watch means the
 watch.
 
