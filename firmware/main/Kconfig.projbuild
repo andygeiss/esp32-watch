@@ -106,6 +106,24 @@ menu "ESP32 Watch"
             in whichever language it was spoken to, so this is the synthesiser
             alone.
 
+    config WATCH_NAME
+        string "Assistant name"
+        default ""
+        help
+            What the assistant calls itself. Empty means "Kai". It reaches the
+            chat model through the system prompt, so this is the answer to
+            "who are you?" and nothing else — it does not change what the
+            microphone listens for.
+
+            Set it together with the wake phrase below. They are two settings
+            on purpose: the wake list is what the transcriber writes down for
+            a name it has never been shown, and its built-in spellings include
+            "hey ky" and "hey chai", so a name taken from it would have the
+            watch introducing itself as Chai. What it is called and how it is
+            misheard are two different facts.
+
+            The start-up log names both.
+
     config WATCH_WAKE_PHRASE
         string "Wake phrase"
         default ""
@@ -127,6 +145,7 @@ menu "ESP32 Watch"
                 hey ada|hey adah|hi ada
 
             Match the greeting and not the name on its own, or every word
-            that merely starts the same way wakes the watch.
+            that merely starts the same way wakes the watch. Changing this
+            alone does not rename the assistant — that is WATCH_NAME above.
 
 endmenu

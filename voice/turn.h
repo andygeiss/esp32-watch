@@ -181,6 +181,28 @@ size_t voice_turn_samples(const voice_turn_t * turn);
 #define VOICE_WAKE_MAX   8
 #define VOICE_WAKE_BYTES 256
 
+/* What the assistant calls itself. `Kai` unless the platform says otherwise.
+ *
+ * This is a second setting beside the wake phrase and not derived from it,
+ * which is the whole point. The wake list is what the *transcriber* writes
+ * down for a name it has never been shown — the six built-in spellings
+ * include "hey ky" and "hey chai" — so a name taken from it would have the
+ * watch introducing itself as Chai. What it is called and how it is misheard
+ * are two different facts, and only one of them is spoken aloud. */
+#define VOICE_NAME       "Kai"
+#define VOICE_NAME_BYTES 32
+
+/**
+ * Name the assistant. NULL or empty means VOICE_NAME. False when it did not
+ * fit, and the default stays in force. It reaches the brain through the
+ * system prompt and nowhere else — the wake phrase is what the microphone
+ * listens for, and it is set separately.
+ */
+bool voice_name_set(const char * name);
+
+/** What the assistant calls itself. Each platform logs it at start-up. */
+const char * voice_name(void);
+
 /**
  * What the watch answers to: a '|'-separated list of spellings, because the
  * transcriber has never been shown the name and does not write it down the
@@ -302,13 +324,17 @@ const voice_models_t * voice_models_get(void);
 #define VOICE_BRAIN_TYPE "application/json"
 
 /* What the brain is told before it hears anything, and how much it may say
- * back. Both are about a watch rather than about a server, so they are the
- * same decision on both platforms and stay here: the reply leaves through a
+ * back. The shape is about a watch rather than about a server, so it is the
+ * same decision on both platforms and stays here: the reply leaves through a
  * speaker on someone's wrist, where a paragraph is a minute of talking and a
- * bulleted list is not a thing that can be said at all. */
+ * bulleted list is not a thing that can be said at all.
+ *
+ * The name in it is the one part that is configuration, because it is the
+ * answer to "who are you?" and that is a thing an owner gets to decide. */
 #define VOICE_BRAIN_MAX_TOKENS 256
-#define VOICE_SYSTEM                                                          \
-    "You are Kai, the voice of a wristwatch. Answer in the language the "     \
+#define VOICE_SYSTEM_BYTES     512
+#define VOICE_SYSTEM_FMT                                                      \
+    "You are %s, the voice of a wristwatch. Answer in the language the "      \
     "question was asked in. Keep it to one or two short sentences: every "    \
     "word is read aloud through a small speaker. No markdown, no lists, no "  \
     "emoji and no stage directions — only what should be said."

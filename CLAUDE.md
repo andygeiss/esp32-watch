@@ -660,14 +660,34 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_BRAIN_MODEL` | `CONFIG_WATCH_BRAIN_MODEL` | `Qwen3.8-27B-oQ4e-mtp`; the word `echo` means no chat request at all |
 | `WATCH_TTS_MODEL` | `CONFIG_WATCH_TTS_MODEL` | `chatterbox-multilingual-v3` |
 | `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
+| `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
 | `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
 
-**Both halves say what they took, at start-up, and the wake phrase is the one
-that needed saying.** A list that does not fit leaves the default in force, so
-a phrase that was rejected and a phrase that was never set look identical from
-then on — `answering to "hey ada" and 2 other spellings of it` is the line
-that tells them apart. `voice_wake_count()` and `voice_wake_at()` are in
-`turn.h` for it, the same reason `voice_models_get()` is.
+**The name and the wake phrase are two settings, and that is deliberate.**
+The wake list is what the *transcriber* writes down for a name it has never
+been shown — the six built-in spellings include `hey ky` and `hey chai` — so a
+name derived from it would have the watch introducing itself as Chai. What the
+assistant is called and how it is misheard are two different facts, and only
+one of them is ever spoken. `WATCH_NAME` is the answer to "who are you?", and
+it reaches the brain through the system prompt and nowhere else; the wake
+phrase is what the microphone listens for, and it reaches `voice_after_wake()`
+and nowhere else.
+
+Setting one and forgetting the other is the mistake this arrangement invites,
+and it is quiet: a watch renamed only in the wake phrase answers to `Hey Ada`
+and then says it is Kai.
+
+**So both halves say what they took, on one line, at start-up.** A wake list
+that does not fit also leaves the default in force, so a phrase that was
+rejected and one that was never set look identical from then on. One line
+settles both:
+
+    voice: called Ada, answering to "hey ada" and 2 other spellings of it
+
+`voice_name()`, `voice_wake_count()` and `voice_wake_at()` are in `turn.h` for
+it, the same reason `voice_models_get()` is. The system prompt is built once,
+when the name is set, rather than on every turn — it changes only when the
+name does.
 
 The key is the reason the host reads the environment rather than a header. A
 key compiled in is a key committed, and this repository is public; the rest
@@ -686,6 +706,7 @@ setting nobody uses.
     # .env — gitignored, one machine's setup
     WATCH_VOICE_URL="https://omlx.ai-at-home.de"
     WATCH_VOICE_KEY="..."
+    WATCH_NAME="Ada"
     WATCH_WAKE_PHRASE="hey ada|hey adah|hi ada"
 
 **Quote every value in it.** `make run` sources the file, so an unquoted value
@@ -799,11 +820,13 @@ None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
 all. `voice/turn.c` *is* in `check`, on both counts: it compiles clean under
 `-Werror` and its symbol list is inspected, which is exactly what it earns by
-being the file both platforms share. The system prompt and the reply's token
-budget are the two things in `turn.h` that stayed decisions rather than
-settings: both are about a watch rather than about a server, and a reply that
-leaves through a speaker on someone's wrist has the same shape whichever
-model wrote it.
+being the file both platforms share. The shape of the system prompt and the
+reply's token budget are what stayed decisions rather than settings: both are
+about a watch rather than about a server, and a reply that leaves through a
+speaker on someone's wrist has the same shape whichever model wrote it. The
+name inside that prompt is the exception, and it is configuration for the
+plainest reason there is — it is the answer to "who are you?", which is the
+owner's to give.
 
 ## Verifying a render without a screenshot
 

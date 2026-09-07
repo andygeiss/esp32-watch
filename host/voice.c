@@ -88,6 +88,7 @@
 #define VOICE_ENV_TTS      "WATCH_TTS_MODEL"
 #define VOICE_ENV_LANGUAGE "WATCH_LANGUAGE"
 #define VOICE_ENV_WAKE     "WATCH_WAKE_PHRASE"
+#define VOICE_ENV_NAME     "WATCH_NAME"
 
 /* An oMLX on this machine, which is what a simulator usually has in front of
  * it, and the one address that needs no TLS and no key. */
@@ -805,17 +806,23 @@ static bool configure(void)
     if (!voice_models_set(&models)) {
         SDL_Log("voice: a model name does not fit — using the default for it");
     }
+    if (!voice_name_set(env(VOICE_ENV_NAME, NULL))) {
+        SDL_Log("voice: that name does not fit — the assistant is still %s", voice_name());
+    }
     if (!voice_wake_set(env(VOICE_ENV_WAKE, NULL))) {
         SDL_Log("voice: that wake phrase does not fit — listening for the default");
     }
-    /* Said out loud because a phrase that did not fit and the default it was
-     * replaced by look identical from here on. */
+    /* Both on one line, because they are two settings and forgetting the
+     * second is the mistake: a watch renamed only in the wake phrase still
+     * answers "who are you?" with the name in its system prompt. Said out
+     * loud, a phrase that did not fit and the default it was replaced by also
+     * stop looking identical. */
     if (voice_wake_count() == 1) {
-        SDL_Log("voice: answering to \"%s\"", voice_wake_at(0));
+        SDL_Log("voice: called %s, answering to \"%s\"", voice_name(), voice_wake_at(0));
     }
     else {
-        SDL_Log("voice: answering to \"%s\" and %zu other spellings of it",
-                voice_wake_at(0), voice_wake_count() - 1);
+        SDL_Log("voice: called %s, answering to \"%s\" and %zu other spellings of it",
+                voice_name(), voice_wake_at(0), voice_wake_count() - 1);
     }
 
     if (server.tls) {

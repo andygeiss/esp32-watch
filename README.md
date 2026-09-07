@@ -136,8 +136,15 @@ cp .env.example .env    # then fill in the key
 ```sh
 WATCH_VOICE_URL="https://omlx.ai-at-home.de"   # http://127.0.0.1:8000 by default
 WATCH_VOICE_KEY="..."                          # no key, no Authorization header
-WATCH_WAKE_PHRASE="hey ada|hey adah|hi ada"    # empty is `Hey Kai` and five spellings
+WATCH_NAME="Ada"                               # what it says it is; empty is `Kai`
+WATCH_WAKE_PHRASE="hey ada|hey adah|hi ada"    # what it listens for
 ```
+
+The name and the wake phrase are two settings on purpose. The wake list is
+what the transcriber writes down for a name it has never been shown — the
+built-in spellings include `hey ky` and `hey chai` — so a name taken from it
+would have the watch introducing itself as Chai. Set only the phrase and it
+answers to `Hey Ada` and then says it is Kai. The start-up log names both.
 
 The quotes are not decoration. `make run` sources the file, so an unquoted
 value with a space or a `|` in it is not an assignment at all —

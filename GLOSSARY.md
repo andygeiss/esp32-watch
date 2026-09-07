@@ -166,6 +166,13 @@ faked. Three files: `voice/turn.c` is the portable half both builds share,
 The two platform halves are the same shape on purpose. _Avoid: audio pipeline,
 speech stack, assistant backend._
 
+**Name** — what the assistant calls itself, `Kai` by default and
+`WATCH_NAME` or `CONFIG_WATCH_NAME` otherwise. It lives in the system prompt
+and is the answer to "who are you?". Not the same thing as the wake phrase,
+which is what the microphone listens for: the one is spoken, the other is
+heard, and the spellings of the second are the transcriber's rather than
+anyone's choice. _Avoid: persona, identity, assistant name (unqualified)._
+
 **Wake phrase** — `Hey Kai`, and the thing that puts the assistant view up.
 There is no wake-word engine on either build, so the microphone stays open,
 every utterance is transcribed, and the phrase is looked for in the text —
@@ -176,4 +183,5 @@ turn. The phrase is configuration and the table is its default:
 hand `voice_wake_set()` a `|`-separated list, and an empty one means the
 table. On the watch the transcriber-as-wake-word is a choice rather than a
 necessity: ESP-SR would hear it locally, but none of WakeNet's models is this
-name. _Avoid: wake word, hotword, trigger._
+name. Renaming the assistant is [[Name]], a separate setting. _Avoid: wake
+word, hotword, trigger._

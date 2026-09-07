@@ -196,8 +196,10 @@ static char language[VOICE_MODEL_BYTES]    = VOICE_LANGUAGE;
 
 /* One name in, the default when there is none, and the default again when
  * what arrived does not fit — a truncated model name is a 404 with no clue in
- * it, and the default at least names a model that exists. */
-static bool model_set(char * field, size_t cap, const char * value, const char * fallback)
+ * it, and the default at least names a model that exists. The assistant's own
+ * name goes through here too, for the same reason: half a name is worse than
+ * the one it was given. */
+static bool setting_set(char * field, size_t cap, const char * value, const char * fallback)
 {
     size_t len;
     bool   fits;
@@ -220,8 +222,8 @@ bool voice_models_set(const voice_models_t * models)
 
     if (models == NULL) models = &NONE;
 
-    if (!model_set(stt_model, sizeof stt_model, models->stt, VOICE_STT_MODEL)) ok = false;
-    if (!model_set(brain_model, sizeof brain_model, models->brain, VOICE_BRAIN_MODEL)) ok = false;
+    if (!setting_set(stt_model, sizeof stt_model, models->stt, VOICE_STT_MODEL)) ok = false;
+    if (!setting_set(brain_model, sizeof brain_model, models->brain, VOICE_BRAIN_MODEL)) ok = false;
     /* The word for "no model", turned into the absence of one so that every
      * caller can ask the same short question. sizeof takes the terminator in
      * with it, which makes this an equality test rather than a prefix one —
@@ -230,9 +232,28 @@ bool voice_models_set(const voice_models_t * models)
     if (strncmp(brain_model, VOICE_BRAIN_ECHO, sizeof VOICE_BRAIN_ECHO) == 0) {
         brain_model[0] = '\0';
     }
-    if (!model_set(tts_model, sizeof tts_model, models->tts, VOICE_TTS_MODEL)) ok = false;
-    if (!model_set(language, sizeof language, models->language, VOICE_LANGUAGE)) ok = false;
+    if (!setting_set(tts_model, sizeof tts_model, models->tts, VOICE_TTS_MODEL)) ok = false;
+    if (!setting_set(language, sizeof language, models->language, VOICE_LANGUAGE)) ok = false;
     return ok;
+}
+
+/* The assistant's own name, and the sentence the brain is opened with. The
+ * prompt is built once here rather than on every turn: it changes only when
+ * the name does, and a turn already costs seconds. */
+static char assistant_name[VOICE_NAME_BYTES] = VOICE_NAME;
+static char system_prompt[VOICE_SYSTEM_BYTES];
+
+bool voice_name_set(const char * name)
+{
+    bool ok = setting_set(assistant_name, sizeof assistant_name, name, VOICE_NAME);
+
+    snprintf(system_prompt, sizeof system_prompt, VOICE_SYSTEM_FMT, assistant_name);
+    return ok;
+}
+
+const char * voice_name(void)
+{
+    return assistant_name;
 }
 
 const voice_models_t * voice_models_get(void)
@@ -780,6 +801,10 @@ bool voice_brain_body(voice_buf_t * body, const char * heard)
 {
     char tokens[16];
 
+    /* A platform that never named the assistant still gets a prompt with the
+     * default name in it, rather than an empty system message. */
+    if (system_prompt[0] == '\0') voice_name_set(NULL);
+
     snprintf(tokens, sizeof tokens, "%d", VOICE_BRAIN_MAX_TOKENS);
 
     return voice_buf_str(body, "{\"model\":") &&
@@ -789,7 +814,7 @@ bool voice_brain_body(voice_buf_t * body, const char * heard)
                                ",\"max_tokens\":") &&
            voice_buf_str(body, tokens) &&
            voice_buf_str(body, ",\"messages\":[{\"role\":\"system\",\"content\":") &&
-           json_quote(body, VOICE_SYSTEM) &&
+           json_quote(body, system_prompt) &&
            voice_buf_str(body, "},{\"role\":\"user\",\"content\":") &&
            json_quote(body, heard) &&
            voice_buf_str(body, "}]}");
