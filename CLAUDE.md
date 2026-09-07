@@ -178,14 +178,20 @@ symlinks this checkout's `lvgl/` into the copy, since a gitignored directory
 is never in the archive. `make clean` removes `build/`.
 
 The Makefile is the baseline's (`stack/makefile.md`) with CMake in place of
-the Go toolchain, minus two things this project has no work for: `fmt` (no
-formatter is set up, and picking one now would reflow every hand-laid line)
-and the `.env` line in `run` (the simulator reads no configuration).
-Underneath it is only:
+the Go toolchain, minus one thing this project has no work for: `fmt`, because
+no formatter is set up and picking one now would reflow every hand-laid line.
+The `.env` line in `run` was missing for a while on the grounds that the
+simulator read no configuration; it does now — the speech server's address and
+its key — so the line is back, and `.env` is gitignored, which is the half of
+the baseline's rule 6 that is never waived. Underneath it is only:
 
     cmake -S . -B build
     cmake --build build -j
     ./build/kai_sim
+
+`make run` is that last line with `.env` sourced in front of it. `check`, `ci`
+and `test` deliberately do not source it: a gate that reads one machine's file
+is a gate that passes on one machine.
 
 Close the window to exit — `LV_SDL_DIRECT_EXIT` is 1. `compile_commands.json`
 lands in `build/` for clangd.
@@ -512,8 +518,8 @@ One loop, three files:
 
 | | |
 |---|---|
-| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, and both request bodies. Compiled into both builds unchanged |
-| `host/voice.c` | the SDL microphone, a hand-written socket, the SDL speaker, an `SDL_Thread` |
+| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, and all three request bodies. Compiled into both builds unchanged |
+| `host/voice.c` | the SDL microphone, a hand-written request over a socket or OpenSSL, the SDL speaker, an `SDL_Thread` |
 | `firmware/main/voice.c` | the ES7210, `esp_http_client`, the ES8311, a FreeRTOS task |
 
 The two platform halves are deliberately the same shape: the same five
@@ -535,14 +541,25 @@ is the same loop in Go:
 |---|---|
 | `internal/parakeet` | `transcribe()` — a multipart POST, one field read back |
 | `internal/chatterbox` | `synthesise()` — a JSON POST carrying the clip to clone |
-| `internal/echo` | `reply()` — the answer is the question, word for word |
+| `internal/openai` | `reply()` — a JSON POST to `/v1/chat/completions`, one field read back |
+| `internal/echo` | `reply()` again, with no model configured: the answer is the question |
 | `internal/app`'s turn state | a thread and three atomics, once per platform |
 
-**The answer is the question said back.** That is a mode rather than a
+**The answer comes from a chat model, or is the question said back.** The
+model is the default — `Qwen3.8-27B-oQ4e-mtp`, in `turn.h` beside the other
+three — so a watch with a server configured thinks rather than echoes. The
+word `echo` in `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` turns it off
+again; it is a word rather than an empty string because empty already means
+"the default", and `turn.c` is where that word is understood, once, on the way
+in. `BRAIN=echo` is what the Go orchestrator calls the same mode. The echo
+is a mode rather than a
 placeholder — it is the shortest path through the whole pipeline, so a turn
-that breaks here breaks everywhere, and what comes out of the speaker is
-exactly what the transcriber heard. `reply()` is the one function a language
-model would go behind; nothing else would move. `internal/domain/speech.go`'s
+that breaks there breaks everywhere, what comes out of the speaker is exactly
+what the transcriber heard, and it needs no third service. Both live behind
+`reply()`, which is the only function that knows the difference; nothing else
+moved when the model went in. A brain that is configured and fails is silence
+rather than an echo: a watch that repeats the question when the model could
+not be reached looks like it answered. `internal/domain/speech.go`'s
 chunker is the other half of that job and is deliberately not translated yet:
 it cuts a streaming reply at sentence seams so speech starts before the text
 is finished, and with an echo there is nothing to stream.
@@ -559,7 +576,8 @@ in one go.
 
 **The phrase is configuration, and `Hey Kai` is its default.** The platform
 hands `voice_wake_set()` a `|`-separated list of spellings at start-up —
-`VOICE_WAKE_PHRASE` in `host/voice.c`, `CONFIG_WATCH_WAKE_PHRASE` on the device
+`WATCH_WAKE_PHRASE` in the host's environment, `CONFIG_WATCH_WAKE_PHRASE` on
+the device
 — which is the crossing the server address already makes. An empty list means
 `WAKE` itself, so those six spellings stay written down exactly once and a
 platform that wants them says nothing rather than repeating them. Case and
@@ -607,12 +625,70 @@ the acoustic echo cancellation this half-duplex loop has none of — the same
 reason the two corner flags are independent. ESP-SR gives the S3 that, and the
 interrupt comes back with it.
 
-**No libraries beyond SDL2**, which is what `SPEC.md` allows. So the HTTP
-client is a socket, a request written by hand and a reply read back; the JSON
-is a scanner for one string field, not a parser; and base64 and the WAV header
-are twenty lines each. That is not a workaround. The device will speak to the
-same two endpoints through `esp_http_client`, and a body built by hand ports
-where a libcurl call site would not.
+**No libraries beyond SDL2 and OpenSSL**, which is what `SPEC.md` allows. So
+the HTTP client is still a request written by hand and a reply read back; the
+JSON is a scanner for one string field, not a parser; and base64 and the WAV
+header are twenty lines each. That is not a workaround. The device speaks to
+the same three endpoints through `esp_http_client`, and a body built by hand
+ports where a libcurl call site would not.
+
+**OpenSSL is `send()` and `recv()` and nothing above them.** It went in when
+the server stopped being on the same desk: `omlx.ai-at-home.de` answers `308`
+on port 80, so a watch that talks to it has no plaintext way in. An `http://`
+address still skips all of it, which is what an oMLX on this machine is. Two
+calls do the work and leaving either out fails quietly —
+`SSL_set_tlsext_host_name()` is how a proxy fronting several names knows which
+certificate to present, and `SSL_set1_host()` is what makes OpenSSL check that
+the certificate belongs to the name asked for. Verification without the second
+proves only that some CA signed something. The device gets the same two things
+from `esp_http_client` plus the certificate bundle ESP-IDF already compiles in
+(`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`), which is one line in `http_post()`.
+
+**Everything about the server is configuration, and it is the same list
+twice.** The address, the API key, the three model names, the language and the
+wake phrase: the environment on the host, menuconfig on the device, and both
+hand them to `voice_url_parse()`, `voice_models_set()` and `voice_wake_set()`
+in `turn.c`. Empty means the default, which is written down exactly once — in
+`turn.h` for the models, in `turn.c` for the wake table — so a platform that
+wants the default says nothing rather than keeping a second copy of it.
+
+| host, from the environment | device, from menuconfig | empty means |
+|---|---|---|
+| `WATCH_VOICE_URL` | `CONFIG_WATCH_VOICE_URL` | `http://127.0.0.1:8000` on the host; on the device, no assistant at all |
+| `WATCH_VOICE_KEY` | `CONFIG_WATCH_VOICE_KEY` | no `Authorization` header is sent |
+| `WATCH_STT_MODEL` | `CONFIG_WATCH_STT_MODEL` | `parakeet-tdt-0.6b-v3` |
+| `WATCH_BRAIN_MODEL` | `CONFIG_WATCH_BRAIN_MODEL` | `Qwen3.8-27B-oQ4e-mtp`; the word `echo` means no chat request at all |
+| `WATCH_TTS_MODEL` | `CONFIG_WATCH_TTS_MODEL` | `chatterbox-multilingual-v3` |
+| `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
+| `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
+
+The key is the reason the host reads the environment rather than a header. A
+key compiled in is a key committed, and this repository is public; the rest
+follow it so that configuring the simulator is one kind of act and not two.
+`make run` sources `.env` and then inherits the shell, so either place works
+and `.env` is the one that survives a new terminal:
+
+    # .env — gitignored, one machine's setup
+    WATCH_VOICE_URL=https://omlx.ai-at-home.de
+    WATCH_VOICE_KEY=...
+
+Neither half ever logs the key, only whether there is one. On the device it is
+compiled into the image, and anyone with the flash has it.
+
+**An empty key means no header at all, not an empty one.** `Authorization:
+Bearer ` with nothing behind it is a rejected request rather than an
+unauthenticated one, and the two want different answers.
+
+**Thinking has to be turned off through `chat_template_kwargs`.** This one was
+measured, not assumed. Against oMLX with `Qwen3.8-27B-oQ4e-mtp` the top-level
+`enable_thinking` has no effect whatever — three requests out of three came
+back with the reply starting `Thinking: 1. Analyze the Request …`, every word
+of which the watch reads aloud before reaching the answer. The same three with
+`"chat_template_kwargs":{"enable_thinking":false}` came back `Es ist ungefähr
+zehn Uhr morgens.` `voice_brain_body()` sends both, because other servers read
+the top-level one and no server here objects to seeing it twice. The Go
+orchestrator's `internal/openai` sends only the top-level field, and against
+this server it has the same problem.
 
 Five things about it are load-bearing:
 
@@ -672,30 +748,39 @@ Five things about it are load-bearing:
 
 **The watch needs three things before it says a word**: an SSID, a server
 address, and that clip. All three are off by default and each one missing
-gives the same answer — a clock with two dim corners. `idf.py -C firmware
-menuconfig`, under **ESP32 Watch**: `CONFIG_WATCH_VOICE_HOST` is an address *on
-the network the watch joins*, not `127.0.0.1`, which on the watch means the
-watch.
+gives the same answer — a clock with two dim corners. A key is the fourth on
+any server that checks one, and it fails differently: `401`, with the status
+and the server's own sentence in the log, and a line naming the setting to
+fill in. `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
+`CONFIG_WATCH_VOICE_URL` is a whole address — `https://omlx.ai-at-home.de`,
+or `http://192.168.1.20:8000` for one on the network the watch joins, but
+never `127.0.0.1`, which on the watch means the watch.
 
 Because they default off, the interesting half of `firmware/main/voice.c` is
 folded away by the compiler in a default build — `voice_start()` returns at
 its first line and the linker drops the rest. A build that only proves the
-default configuration is not proof the voice path compiles. Set a host in
+default configuration is not proof the voice path compiles. Set a URL in
 `sdkconfig` before believing a green firmware build.
 
 Measured on this machine, against the oMLX server at `127.0.0.1:8000`:
 transcription answers in about **0.9 s** for 3 s of speech, and synthesis
 takes **2.6-3.3 s** to produce 3 s of it — roughly real time, which is the
 number the chunker exists to hide once there is a model writing the reply.
+Through `https://omlx.ai-at-home.de`, which is that same machine reached the
+long way round, a whole turn measured **0.4 s** to transcribe, **6-11 s** to
+think with `Qwen3.8-27B-oQ4e-mtp` and **2-23 s** to speak, depending on how
+long the answer was. The brain is the expensive part, and it is what the
+untranslated chunker exists to hide.
 
 None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
 all. `voice/turn.c` *is* in `check`, on both counts: it compiles clean under
 `-Werror` and its symbol list is inspected, which is exactly what it earns by
-being the file both platforms share. The server address and the wake phrase
-are the two things that are configuration — a `#define` on the host, Kconfig
-on the device — and the model names and the language are neither, because
-they are the same decision twice and live in `turn.h`.
+being the file both platforms share. The system prompt and the reply's token
+budget are the two things in `turn.h` that stayed decisions rather than
+settings: both are about a watch rather than about a server, and a reply that
+leaves through a speaker on someone's wrist has the same shape whichever
+model wrote it.
 
 ## Verifying a render without a screenshot
 

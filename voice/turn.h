@@ -25,11 +25,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Where the two models are. The host and the device speak to the same oMLX
- * server, so the model names and the language are one decision, not two. */
-#define VOICE_STT_MODEL "parakeet-tdt-0.6b-v3"
-#define VOICE_TTS_MODEL "chatterbox-multilingual-v3"
-#define VOICE_LANGUAGE  "de"
+/* The three models and the language the watch uses unless the platform says
+ * otherwise. They were one decision twice until the watch started speaking to
+ * a server it does not run: a model host serves several models and swaps
+ * them, so which one answers is an operational fact and belongs beside the
+ * address rather than in here. These stay as the defaults, because a default
+ * written down once is still worth having.
+ *
+ * The brain has a second spelling as well as a default. VOICE_BRAIN_ECHO is
+ * the word that turns the model off: the answer becomes the question said
+ * back, which is the shortest path through the whole pipeline — a turn that
+ * breaks there breaks everywhere, it needs no third service, and what comes
+ * out of the speaker is exactly what the transcriber heard. It is a word
+ * rather than an empty string because empty already means "the default", and
+ * the default is a model now. `BRAIN=echo` is what the Go orchestrator calls
+ * the same mode. */
+#define VOICE_STT_MODEL   "parakeet-tdt-0.6b-v3"
+#define VOICE_TTS_MODEL   "chatterbox-multilingual-v3"
+#define VOICE_BRAIN_MODEL "Qwen3.8-27B-oQ4e-mtp"
+#define VOICE_BRAIN_ECHO  "echo"
+#define VOICE_LANGUAGE    "de"
 
 /* 16 kHz mono is what speech recognition wants. Nothing on either side
  * resamples, so a device that will not open at this rate is refused rather
@@ -195,16 +210,96 @@ const char * voice_after_wake(const char * heard);
 bool voice_is_goodbye(const char * heard);
 
 /* ------------------------------------------------------------------ */
+/* Where the server is, and which models answer.                              */
+/* ------------------------------------------------------------------ */
+
+/* Room for one address and one model name. A host name is bounded by DNS at
+ * 253 bytes and nothing here is close; the bytes are static buffers because
+ * turn.c is not the file that owns an allocator — the same reason the wake
+ * phrases are. */
+#define VOICE_HOST_BYTES  128
+#define VOICE_PORT_BYTES  8
+#define VOICE_MODEL_BYTES 64
+#define VOICE_KEY_BYTES   256
+
+/** An address, taken apart far enough for either platform to dial it. */
+typedef struct {
+    bool tls;                      /**< https, so the transport needs one */
+    char host[VOICE_HOST_BYTES];
+    char port[VOICE_PORT_BYTES];   /**< always written out, 443 or 80 by default */
+} voice_url_t;
+
+/**
+ * Splits `https://host[:port][/path]` into something to connect to. A bare
+ * `host[:port]` is plaintext, which is what a server on the same desk is.
+ * The path is ignored: every request here names its own, and a base URL that
+ * carried one would have to be pasted onto them.
+ *
+ * False when there is nothing to dial — an empty string, or a scheme this
+ * cannot speak. That is the platform's cue to stay a clock, not an error to
+ * report: an unconfigured address is the ordinary state of a fresh clone.
+ */
+bool voice_url_parse(const char * url, voice_url_t * out);
+
+/** Which models answer. A NULL or empty field means the default beside it. */
+typedef struct {
+    const char * stt;
+    const char * brain;
+    const char * tts;
+    const char * language;
+} voice_models_t;
+
+/**
+ * Name the models to ask. NULL means all four defaults, which is what a
+ * platform that has nothing to say says — the defaults stay written down
+ * exactly once, the same bargain voice_wake_set() makes.
+ *
+ * `brain` takes VOICE_BRAIN_ECHO as well as a model name, and is left empty
+ * when it does; voice_models_get() reports it that way, so every caller asks
+ * one question and the word is understood in exactly one place.
+ *
+ * False when a name did not fit, and the defaults stay in force for the ones
+ * that did not; the platform has something to log and a turn still works.
+ */
+bool voice_models_set(const voice_models_t * models);
+
+/**
+ * The four names actually in force, defaults and all. Two jobs, which is why
+ * it hands back all of them: the loop asks whether `brain` is empty, because
+ * that is what VOICE_BRAIN_ECHO was turned into on the way in and there is
+ * then nothing to POST; and each platform logs the set at start-up, which is
+ * the first thing worth knowing when a turn comes back empty.
+ *
+ * The pointers are into this file's own storage and stay valid; the next
+ * voice_models_set() overwrites what they point at.
+ */
+const voice_models_t * voice_models_get(void);
+
+/* ------------------------------------------------------------------ */
 /* The wire.                                                                  */
 /* ------------------------------------------------------------------ */
 
 /** The multipart boundary the transcription request is cut on. */
 #define VOICE_BOUNDARY "----kaiwatch7f3a1c9e"
 
-#define VOICE_STT_PATH "/v1/audio/transcriptions"
-#define VOICE_TTS_PATH "/v1/audio/speech"
-#define VOICE_STT_TYPE "multipart/form-data; boundary=" VOICE_BOUNDARY
-#define VOICE_TTS_TYPE "application/json"
+#define VOICE_STT_PATH   "/v1/audio/transcriptions"
+#define VOICE_TTS_PATH   "/v1/audio/speech"
+#define VOICE_BRAIN_PATH "/v1/chat/completions"
+#define VOICE_STT_TYPE   "multipart/form-data; boundary=" VOICE_BOUNDARY
+#define VOICE_TTS_TYPE   "application/json"
+#define VOICE_BRAIN_TYPE "application/json"
+
+/* What the brain is told before it hears anything, and how much it may say
+ * back. Both are about a watch rather than about a server, so they are the
+ * same decision on both platforms and stay here: the reply leaves through a
+ * speaker on someone's wrist, where a paragraph is a minute of talking and a
+ * bulleted list is not a thing that can be said at all. */
+#define VOICE_BRAIN_MAX_TOKENS 256
+#define VOICE_SYSTEM                                                          \
+    "You are Kai, the voice of a wristwatch. Answer in the language the "     \
+    "question was asked in. Keep it to one or two short sentences: every "    \
+    "word is read aloud through a small speaker. No markdown, no lists, no "  \
+    "emoji and no stage directions — only what should be said."
 
 /** The whole body of a transcription request: one WAV in a multipart form. */
 bool voice_stt_body(voice_buf_t * body, const int16_t * pcm, size_t samples);
@@ -220,6 +315,31 @@ bool voice_tts_body(voice_buf_t * body, const char * text,
 
 /** The transcript out of a transcription reply. */
 bool voice_stt_text(const char * json, char * out, size_t cap);
+
+/**
+ * The whole body of a chat completion request: the system prompt above, then
+ * what was heard, and the model named by voice_models_set().
+ *
+ * Thinking is turned off in it and that is load-bearing, not a tuning knob. A
+ * reasoning model left to think writes its scratchpad into the reply —
+ * "Thinking: 1. Analyze the request …" — and every word of it would be read
+ * aloud through the watch's speaker before the answer arrived. It is sent
+ * both ways because only one of them works here; see the body in turn.c.
+ *
+ * It does not stream, and that is the other half of the same decision. The
+ * chunker that cuts a reply at sentence seams is not translated yet, so there
+ * is nothing here that could start speaking early; a stream would only be a
+ * second parser for the same text.
+ */
+bool voice_brain_body(voice_buf_t * body, const char * heard);
+
+/**
+ * The answer out of a chat completion reply. It reads the message's own
+ * `content`, from `"message"` onward rather than from the top of the
+ * document: a reasoning model returns `reasoning_content` beside it, and the
+ * one that gets spoken must be the one the model meant to say.
+ */
+bool voice_brain_text(const char * json, char * out, size_t cap);
 
 /** Base64, for the clip. Encoded once: it is the same bytes on every request. */
 char * voice_base64(const unsigned char * in, size_t len);

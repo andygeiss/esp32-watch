@@ -14,5 +14,9 @@ firmware/sdkconfig.old
 # person, so it stays out of a licensed repository; voice.c does without it.
 voices/
 
+# Where the speech server's address and its API key go, read by `make run`.
+# One machine's setup, and one of the four lines is a secret.
+.env
+
 # clangd writes its index here as a side effect of compile_commands.json.
 .cache/

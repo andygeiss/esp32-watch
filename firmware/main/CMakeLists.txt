@@ -9,7 +9,7 @@ idf_component_register(
     SRCS "main.c" "board.c" "net.c" "voice.c"
     INCLUDE_DIRS "."
     REQUIRES kai_ui kai_turn lvgl driver esp_lcd esp_timer esp_wifi esp_netif
-             esp_http_client nvs_flash)
+             esp_http_client esp-tls nvs_flash)
 
 # The clip KAI borrows its voice from, and the words it says. Both are
 # gitignored — the clip is a recording of a person and this repository is

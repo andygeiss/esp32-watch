@@ -185,6 +185,120 @@ size_t voice_turn_samples(const voice_turn_t * turn)
 /* The name, and the goodbye. There is nothing to press, so both of them are  */
 /* words, and words arrive here only as a transcript.                         */
 /* ------------------------------------------------------------------ */
+/* Where the server is, and which models answer. Both used to be written into */
+/* this file; a watch that speaks to a server it does not run has to be told. */
+/* ------------------------------------------------------------------ */
+
+static char stt_model[VOICE_MODEL_BYTES]   = VOICE_STT_MODEL;
+static char brain_model[VOICE_MODEL_BYTES] = VOICE_BRAIN_MODEL;
+static char tts_model[VOICE_MODEL_BYTES]   = VOICE_TTS_MODEL;
+static char language[VOICE_MODEL_BYTES]    = VOICE_LANGUAGE;
+
+/* One name in, the default when there is none, and the default again when
+ * what arrived does not fit — a truncated model name is a 404 with no clue in
+ * it, and the default at least names a model that exists. */
+static bool model_set(char * field, size_t cap, const char * value, const char * fallback)
+{
+    size_t len;
+    bool   fits;
+
+    if (value == NULL || value[0] == '\0') value = fallback;
+    len = strlen(value);
+    fits = len + 1 <= cap;
+    if (!fits) {
+        value = fallback;
+        len = strlen(value);
+    }
+    memcpy(field, value, len + 1);
+    return fits;
+}
+
+bool voice_models_set(const voice_models_t * models)
+{
+    static const voice_models_t NONE = { NULL, NULL, NULL, NULL };
+    bool ok = true;
+
+    if (models == NULL) models = &NONE;
+
+    if (!model_set(stt_model, sizeof stt_model, models->stt, VOICE_STT_MODEL)) ok = false;
+    if (!model_set(brain_model, sizeof brain_model, models->brain, VOICE_BRAIN_MODEL)) ok = false;
+    /* The word for "no model", turned into the absence of one so that every
+     * caller can ask the same short question. sizeof takes the terminator in
+     * with it, which makes this an equality test rather than a prefix one —
+     * and it is strncmp because strcmp would be a fourteenth undefined symbol
+     * in a file whose thirteen are a checked list. */
+    if (strncmp(brain_model, VOICE_BRAIN_ECHO, sizeof VOICE_BRAIN_ECHO) == 0) {
+        brain_model[0] = '\0';
+    }
+    if (!model_set(tts_model, sizeof tts_model, models->tts, VOICE_TTS_MODEL)) ok = false;
+    if (!model_set(language, sizeof language, models->language, VOICE_LANGUAGE)) ok = false;
+    return ok;
+}
+
+const voice_models_t * voice_models_get(void)
+{
+    static voice_models_t now;
+
+    now.stt = stt_model;
+    now.brain = brain_model;
+    now.tts = tts_model;
+    now.language = language;
+    return &now;
+}
+
+bool voice_url_parse(const char * url, voice_url_t * out)
+{
+    const char * at;
+    size_t n = 0;
+
+    out->tls = false;
+    out->host[0] = '\0';
+    out->port[0] = '\0';
+
+    if (url == NULL || url[0] == '\0') return false;
+
+    at = url;
+    if (strncmp(at, "https://", 8) == 0) {
+        out->tls = true;
+        at += 8;
+    }
+    else if (strncmp(at, "http://", 7) == 0) {
+        at += 7;
+    }
+    else if (strstr(at, "://") != NULL) {
+        return false; /* a scheme neither transport can speak */
+    }
+
+    /* A bracketed IPv6 literal is refused rather than misread: the colon that
+     * separates a port is the same byte the address is full of, and answering
+     * "no" is better than dialling half an address. Neither service has ever
+     * been reached at one. */
+    if (*at == '[') return false;
+
+    while (at[n] != '\0' && at[n] != '/' && at[n] != ':') n++;
+    if (n == 0 || n + 1 > sizeof out->host) return false;
+    memcpy(out->host, at, n);
+    out->host[n] = '\0';
+
+    if (at[n] == ':') {
+        const char * port = at + n + 1;
+        size_t p = 0;
+
+        while (port[p] >= '0' && port[p] <= '9') p++;
+        if (p == 0 || p + 1 > sizeof out->port) return false;
+        memcpy(out->port, port, p);
+        out->port[p] = '\0';
+    }
+    else {
+        /* Written out rather than left empty: both transports want a port,
+         * and the scheme is the only thing that knows which one. */
+        const char * fallback = out->tls ? "443" : "80";
+        memcpy(out->port, fallback, strlen(fallback) + 1);
+    }
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
 
 /* KAI is a name the transcriber has never been shown, so it writes down
  * whichever German word sounded closest, and not the same one every time.
@@ -491,6 +605,18 @@ bool voice_stt_text(const char * json, char * out, size_t cap)
     return json_string(json, "text", out, cap);
 }
 
+/* From "message" onward, so a reasoning model's scratchpad cannot be mistaken
+ * for its answer. The quote in front of the key does most of the work already
+ * — "reasoning_content" does not contain "content" with its opening quote on
+ * — but the field order in a reply is the server's to change, and what gets
+ * spoken has to be the sentence the model meant to say. */
+bool voice_brain_text(const char * json, char * out, size_t cap)
+{
+    const char * message = strstr(json, "\"message\"");
+
+    return json_string(message != NULL ? message : json, "content", out, cap);
+}
+
 /* ------------------------------------------------------------------ */
 /* WAV. One header to write, so the recording can be posted as a file, and    */
 /* two chunks to find, so the reply can be played at whatever rate it came    */
@@ -609,21 +735,62 @@ bool voice_stt_body(voice_buf_t * body, const int16_t * pcm, size_t samples)
            wav_write(body, pcm, samples, VOICE_RATE) &&
            voice_buf_str(body,
                "\r\n--" VOICE_BOUNDARY "\r\n"
-               "Content-Disposition: form-data; name=\"model\"\r\n\r\n"
-               VOICE_STT_MODEL "\r\n"
-               "--" VOICE_BOUNDARY "--\r\n");
+               "Content-Disposition: form-data; name=\"model\"\r\n\r\n") &&
+           voice_buf_str(body, stt_model) &&
+           voice_buf_str(body,
+               "\r\n--" VOICE_BOUNDARY "--\r\n");
 }
 
 bool voice_tts_body(voice_buf_t * body, const char * text,
                     const char * ref_audio, const char * ref_text)
 {
-    return voice_buf_str(body,
-               "{\"model\":\"" VOICE_TTS_MODEL "\",\"response_format\":\"wav\""
-               ",\"speed\":1.0,\"language\":\"" VOICE_LANGUAGE "\",\"input\":") &&
+    return voice_buf_str(body, "{\"model\":") &&
+           json_quote(body, tts_model) &&
+           voice_buf_str(body, ",\"response_format\":\"wav\",\"speed\":1.0"
+                               ",\"language\":") &&
+           json_quote(body, language) &&
+           voice_buf_str(body, ",\"input\":") &&
            json_quote(body, text) &&
            voice_buf_str(body, ",\"ref_audio\":\"") &&
            voice_buf_str(body, ref_audio) &&
            voice_buf_str(body, "\",\"ref_text\":") &&
            json_quote(body, ref_text) &&
            voice_buf_str(body, "}");
+}
+
+
+/* One question, one answer, no history. A turn is the whole conversation
+ * here: the loop keeps nothing between them, so the model is told who it is
+ * and what was said and nothing else.
+ *
+ * Thinking is turned off twice, and which of the two does the work was
+ * measured rather than assumed. Against oMLX with Qwen3.8-27B, the top-level
+ * enable_thinking has no effect at all — three requests out of three came
+ * back with the reply starting "Thinking: 1. Analyze the Request ...", every
+ * word of which the watch would read aloud before reaching the answer. The
+ * same three with chat_template_kwargs came back "Es ist ungefähr zehn Uhr
+ * morgens." That is the one that reaches the model's chat template.
+ *
+ * The top-level field stays because it is what several other servers read,
+ * and no server here has objected to being sent both. The Go orchestrator's
+ * internal/openai sends only the top-level one, and against this server it
+ * has the same problem.
+ */
+bool voice_brain_body(voice_buf_t * body, const char * heard)
+{
+    char tokens[16];
+
+    snprintf(tokens, sizeof tokens, "%d", VOICE_BRAIN_MAX_TOKENS);
+
+    return voice_buf_str(body, "{\"model\":") &&
+           json_quote(body, brain_model) &&
+           voice_buf_str(body, ",\"stream\":false,\"enable_thinking\":false"
+                               ",\"chat_template_kwargs\":{\"enable_thinking\":false}"
+                               ",\"max_tokens\":") &&
+           voice_buf_str(body, tokens) &&
+           voice_buf_str(body, ",\"messages\":[{\"role\":\"system\",\"content\":") &&
+           json_quote(body, VOICE_SYSTEM) &&
+           voice_buf_str(body, "},{\"role\":\"user\",\"content\":") &&
+           json_quote(body, heard) &&
+           voice_buf_str(body, "}]}");
 }

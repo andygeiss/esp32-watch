@@ -25,22 +25,86 @@ menu "ESP32 Watch"
             with, so the zone is compiled in. The default is central Europe
             with EU daylight saving.
 
-    config WATCH_VOICE_HOST
-        string "Speech server address"
+    config WATCH_VOICE_URL
+        string "Speech server URL"
         default ""
         help
-            Where the oMLX server that transcribes and speaks is, as an
-            address on the network the watch joins — not 127.0.0.1, which on
-            the watch means the watch. Leave it empty and the assistant never
-            starts: the watch is a clock, and the microphone and speaker
-            corners stay dim, which is what that dimming is for.
+            Where the oMLX server that hears, thinks and speaks is, as a whole
+            address: https://omlx.ai-at-home.de, or http://192.168.1.20:8000
+            for one on the network the watch joins. Not 127.0.0.1, which on
+            the watch means the watch.
 
-            It needs an SSID above as well. Both services are on the other
-            end of the radio, so no network means no assistant.
+            https makes the request go through TLS, checked against the
+            certificate bundle ESP-IDF compiles in. http skips all of that and
+            is what a server on the same network is reached at. The port is
+            the scheme's own unless one is written down.
 
-    config WATCH_VOICE_PORT
-        int "Speech server port"
-        default 8000
+            Leave it empty and the assistant never starts: the watch is a
+            clock, and the microphone and speaker corners stay dim, which is
+            what that dimming is for.
+
+            It needs an SSID above as well. All three services are on the
+            other end of the radio, so no network means no assistant.
+
+    config WATCH_VOICE_KEY
+        string "Speech server API key"
+        default ""
+        help
+            Sent as "Authorization: Bearer <key>" on every request. A server
+            published on the internet checks one — the proxy in front of
+            omlx.ai-at-home.de holds no secret of its own, so the service
+            behind it is what does the checking.
+
+            Leave it empty and no header is sent at all, which is what an oMLX
+            on the same desk with its key verification off wants. An empty
+            header is a rejected request rather than an unauthenticated one,
+            so the two are not the same thing.
+
+            It is compiled into the image. Anyone with the flash has it.
+
+    config WATCH_STT_MODEL
+        string "Transcribing model"
+        default ""
+        help
+            Empty means the default in voice/turn.h, which is
+            parakeet-tdt-0.6b-v3 and is where that name is written down. Fill
+            it in only to name a different one — a model host serves several
+            and swaps them, which is why this is configuration now.
+
+    config WATCH_BRAIN_MODEL
+        string "Chat model"
+        default ""
+        help
+            What the assistant thinks with. Empty means the default in
+            voice/turn.h, which is Qwen3.8-27B-oQ4e-mtp — the model this
+            watch was built against. Fill it in to name a different one the
+            server hosts.
+
+            Write "echo" and there is no chat request at all: the answer is
+            the question said back, word for word. It needs no third service
+            and is the shortest path through the whole pipeline — a turn that
+            breaks there breaks everywhere — so it is the mode to fall back to
+            when the microphone or the speaker is what is being worked on.
+            Thinking costs several seconds a turn on top of transcribing and
+            speaking.
+
+    config WATCH_TTS_MODEL
+        string "Speaking model"
+        default ""
+        help
+            Empty means the default in voice/turn.h, which is
+            chatterbox-multilingual-v3. It ships no voices of its own, so the
+            reference clip is what it borrows one from either way.
+
+    config WATCH_LANGUAGE
+        string "Language spoken"
+        default ""
+        help
+            The language the synthesiser is told to speak, as a two-letter
+            code. Empty means the default in voice/turn.h, which is "de". The
+            transcriber detects its own and the chat model is asked to answer
+            in whichever language it was spoken to, so this is the synthesiser
+            alone.
 
     config WATCH_WAKE_PHRASE
         string "Wake phrase"

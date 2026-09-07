@@ -30,6 +30,11 @@
  *   missing and the watch is a clock and nothing else — the same answer the
  *   simulator gives when voices/kai.opus is not there.
  *
+ * - **The answer comes from a chat model when one is configured**, and is the
+ *   question said back when none is. The echo needs no third service and is
+ *   the shortest path through the pipeline; both live behind reply(), exactly
+ *   as they do on the host.
+ *
  * - **The microphone is open the whole time**, so every utterance in the room
  *   goes to the transcriber. That is what the host does because a Mac has no
  *   wake-word engine; here it is a choice, and the one worth revisiting
@@ -44,6 +49,7 @@
 #include <string.h>
 
 #include "board.h"
+#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -106,36 +112,57 @@ static const voice_alloc_t PSRAM = { psram_grow, psram_release };
 
 /* ------------------------------------------------------------------ */
 /* HTTP. One connection per request, the same as the host's socket: a turn    */
-/* makes two requests seconds apart, so keeping one alive would be            */
+/* makes three requests seconds apart, so keeping one alive would be          */
 /* bookkeeping for nothing.                                                   */
 /* ------------------------------------------------------------------ */
 
+/* The server, and what it wants to see. Parsed once, at start-up, by the same
+ * function the host uses — so an address that works in the simulator works
+ * here and is written down the same way. */
+static voice_url_t server;
+
 /* POSTs body to path and reads the whole reply into out. Reports the server's
- * own status on a failure — both services answer a bad request with a
+ * own status on a failure — all three services answer a bad request with a
  * sentence saying what was wrong, and it is the fastest route to the cause. */
 static bool http_post(const char * path, const char * content_type,
                       const void * body, size_t body_len, voice_buf_t * out)
 {
-    char url[160];
+    char url[VOICE_HOST_BYTES + 64];
+    char auth[VOICE_KEY_BYTES + 8];
     esp_http_client_handle_t client;
     esp_http_client_config_t config = { 0 };
     int status, written;
     int64_t length;
     bool ok = false;
 
-    snprintf(url, sizeof(url), "http://%s:%d%s",
-             CONFIG_WATCH_VOICE_HOST, CONFIG_WATCH_VOICE_PORT, path);
+    /* Built from the parsed parts rather than pasted onto the configured
+     * string: a trailing slash or a path someone left on the address cannot
+     * turn into a 404 that way, and the port is always the one turn.c settled
+     * on. */
+    snprintf(url, sizeof(url), "%s://%s:%s%s",
+             server.tls ? "https" : "http", server.host, server.port, path);
     config.url = url;
     config.method = HTTP_METHOD_POST;
     config.timeout_ms = VOICE_HTTP_TIMEOUT_MS;
+    /* The certificate bundle ESP-IDF already compiles in — sdkconfig has
+     * CONFIG_MBEDTLS_CERTIFICATE_BUNDLE on. Without this an https address
+     * fails the handshake with nothing but "esp-tls" in the log. */
+    if (server.tls) config.crt_bundle_attach = esp_crt_bundle_attach;
 
     client = esp_http_client_init(&config);
     if (client == NULL) return false;
 
     esp_http_client_set_header(client, "Content-Type", content_type);
 
+    /* No key, no header: an "Authorization: Bearer " with nothing behind it
+     * is a rejected request rather than an unauthenticated one. */
+    if (CONFIG_WATCH_VOICE_KEY[0] != '\0') {
+        snprintf(auth, sizeof auth, "Bearer %s", CONFIG_WATCH_VOICE_KEY);
+        esp_http_client_set_header(client, "Authorization", auth);
+    }
+
     if (esp_http_client_open(client, (int) body_len) != ESP_OK) {
-        ESP_LOGE(TAG, "%s is not answering — is oMLX running?", url);
+        ESP_LOGE(TAG, "%s is not answering — is the server up and reachable?", url);
         goto done;
     }
 
@@ -162,6 +189,9 @@ static bool http_post(const char * path, const char * content_type,
     if (status != 200) {
         ESP_LOGE(TAG, "%s: HTTP %d: %.200s", path, status,
                  out->data != NULL ? out->data : "");
+        if (status == 401 || status == 403) {
+            ESP_LOGE(TAG, "the server wants a key — set CONFIG_WATCH_VOICE_KEY");
+        }
         voice_buf_free(out);
         goto done;
     }
@@ -304,12 +334,31 @@ static void play(const unsigned char * file, size_t len)
     board_speaker_close();
 }
 
-/* What the assistant answers. Word for word, with nothing in front of it —
- * the same echo the simulator gives, and the same seam a language model goes
- * behind. */
-static const char * reply(const char * heard)
+/* What the assistant answers, into out. The same two modes the simulator has,
+ * behind the same function: the question said back when no brain is
+ * configured, and a chat model's answer when one is. A failure is silence
+ * rather than an echo — a watch that repeats the question when the model
+ * could not be reached looks like it answered. */
+static bool reply(const char * heard, char * out, size_t cap)
 {
-    return heard;
+    voice_buf_t body = { 0 }, answer = { 0 };
+    bool ok = false;
+
+    if (voice_models_get()->brain[0] == '\0') {
+        snprintf(out, cap, "%s", heard);
+        return true;
+    }
+
+    if (!voice_brain_body(&body, heard)) goto done;
+    if (!http_post(VOICE_BRAIN_PATH, VOICE_BRAIN_TYPE, body.data, body.len, &answer)) goto done;
+
+    ok = voice_brain_text(answer.data, out, cap);
+    if (!ok) ESP_LOGW(TAG, "no answer in what %s sent back", voice_models_get()->brain);
+
+done:
+    voice_buf_free(&body);
+    voice_buf_free(&answer);
+    return ok;
 }
 
 /* One pass is one utterance. Asleep, the only thing that matters about it is
@@ -322,6 +371,7 @@ static void loop(void * unused)
 
     while (atomic_load(&running)) {
         char heard[VOICE_MAX_TEXT];
+        char answer[VOICE_MAX_TEXT];
         voice_buf_t wav = { 0 };
         const char * say;
         size_t samples;
@@ -369,7 +419,10 @@ static void loop(void * unused)
             ESP_LOGI(TAG, "heard \"%s\"", heard);
         }
 
-        if (synthesise(reply(say), &wav)) {
+        if (!reply(say, answer, sizeof answer)) continue;
+        if (voice_models_get()->brain[0] != '\0') ESP_LOGI(TAG, "answering \"%s\"", answer);
+
+        if (synthesise(answer, &wav)) {
             play((const unsigned char *) wav.data, wav.len);
         }
         voice_buf_free(&wav);
@@ -416,6 +469,41 @@ static bool load_voice(void)
 #endif
 }
 
+/* Everything the platform knows and turn.c does not: where the server is,
+ * which models answer and what the watch is called. The host reads the same
+ * six settings out of the environment and calls the same two setters with
+ * them, so what the watch is told and what the simulator is told is one list.
+ *
+ * False means there is nowhere to ask, which is a clock and not an error. */
+static bool configure(void)
+{
+    voice_models_t models;
+
+    if (!voice_url_parse(CONFIG_WATCH_VOICE_URL, &server)) {
+        ESP_LOGW(TAG, "no server configured — the watch stays a clock");
+        return false;
+    }
+
+    /* Empty rather than the default spelled out again: menuconfig says
+     * nothing and turn.c uses the one list it holds. */
+    models.stt = CONFIG_WATCH_STT_MODEL;
+    models.brain = CONFIG_WATCH_BRAIN_MODEL;
+    models.tts = CONFIG_WATCH_TTS_MODEL;
+    models.language = CONFIG_WATCH_LANGUAGE;
+    if (!voice_models_set(&models)) {
+        ESP_LOGW(TAG, "a model name does not fit — using the default for it");
+    }
+    if (!voice_wake_set(CONFIG_WATCH_WAKE_PHRASE)) {
+        ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
+    }
+
+    /* The key is never logged, only whether there is one. */
+    ESP_LOGI(TAG, "%s://%s:%s, %s key",
+             server.tls ? "https" : "http", server.host, server.port,
+             CONFIG_WATCH_VOICE_KEY[0] != '\0' ? "with a" : "with no");
+    return true;
+}
+
 void voice_start(void)
 {
     /* turn.c's buffers before anything else asks it for one: a turn's body is
@@ -423,14 +511,7 @@ void voice_start(void)
      * total. */
     voice_buf_alloc(&PSRAM);
 
-    if (!voice_wake_set(CONFIG_WATCH_WAKE_PHRASE)) {
-        ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
-    }
-
-    if (CONFIG_WATCH_VOICE_HOST[0] == '\0') {
-        ESP_LOGW(TAG, "no server configured — the watch stays a clock");
-        return;
-    }
+    if (!configure()) return;
     if (!load_voice()) return;
     if (!board_audio_init()) {
         ESP_LOGE(TAG, "no audio — the watch stays a clock");
@@ -452,7 +533,14 @@ void voice_start(void)
     }
 
     ESP_LOGI(TAG, "waiting to be called, hearing through %s and speaking as %s",
-             VOICE_STT_MODEL, VOICE_TTS_MODEL);
+             voice_models_get()->stt, voice_models_get()->tts);
+    if (voice_models_get()->brain[0] != '\0') {
+        ESP_LOGI(TAG, "thinking with %s", voice_models_get()->brain);
+    }
+    else {
+        ESP_LOGI(TAG, "brain is \"%s\" — the answer is the question said back",
+                 VOICE_BRAIN_ECHO);
+    }
 }
 
 void voice_stop(void)

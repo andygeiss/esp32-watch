@@ -18,9 +18,12 @@ add_compile_definitions(LV_CONF_INCLUDE_SIMPLE)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # pkg-config rather than find_package(SDL2): it follows the Homebrew arm64
-# prefix (/opt/homebrew) without any hand-written hint paths.
+# prefix (/opt/homebrew) without any hand-written hint paths. OpenSSL comes
+# the same way and for the same reason — macOS ships a libssl with no headers
+# for it, so this is Homebrew's openssl@3 and pkg-config is what finds the keg.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(OPENSSL REQUIRED IMPORTED_TARGET openssl)
 
 # The simulator needs the library alone; LVGL's bundled examples, demos and
 # ThorVG (LV_USE_THORVG is 0 in lv_conf.h) are dead weight in the build.
@@ -66,8 +69,12 @@ target_include_directories(kai_turn PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/voice)
 # the gate and the two request bodies. Deliberately not in kai_ui and not in
 # kai_test — `make test` has to pass with no oMLX server and no audio device
 # anywhere near it.
+# OpenSSL reaches kai_sim and nothing else. The speech server may be on the
+# other side of the internet — omlx.ai-at-home.de answers 308 on port 80 — so
+# host/voice.c needs TLS under its hand-written request. kai_test never links
+# voice.c, so the headless gate still needs nothing but a compiler.
 add_executable(kai_sim host/main.c host/voice.c)
-target_link_libraries(kai_sim PRIVATE kai_ui kai_turn PkgConfig::SDL2)
+target_link_libraries(kai_sim PRIVATE kai_ui kai_turn PkgConfig::SDL2 PkgConfig::OPENSSL)
 
 # Renders the UI into a byte array and checks what came out. `make test`.
 add_executable(kai_test host/test_ui.c)

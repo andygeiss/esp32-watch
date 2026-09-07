@@ -9,9 +9,12 @@ building the watch face.
 
 **Guardrails.**
 
-- No libraries in the simulator beyond LVGL and SDL2. On the device,
-  ESP-IDF plus the two drivers for this board's panel and touch
-  controller, and nothing else.
+- No libraries in the simulator beyond LVGL, SDL2 and OpenSSL. OpenSSL is
+  there for one reason: the speech server may be reached over the internet,
+  and `omlx.ai-at-home.de` answers `308` on port 80, so there is no plaintext
+  way in. It replaces `send()` and `recv()` and nothing else — the HTTP
+  request is still written by hand. On the device, ESP-IDF plus the two
+  drivers for this board's panel and touch controller, and nothing else.
 - LVGL stays pinned to a release tag. Never `master`.
 - `ui/` and `voice/` must not reference SDL or ESP-IDF; both compile unchanged
   into the firmware, and `voice/` may not reference LVGL either. Host-only
@@ -70,7 +73,12 @@ point.
   next sentence comes back out of the speakers, with the two corners lit while
   it does. Saying `tschüss`, or saying nothing for 30 s, goes back to the
   clock.
-- `host/voice.c` uses nothing but SDL2 and the C standard library: no HTTP
-  library, no JSON library.
+- `host/voice.c` uses nothing but SDL2, OpenSSL and the C standard library:
+  no HTTP library, no JSON library.
+- The address, the API key, the three model names and the language are
+  configuration on both builds — the environment on the host, menuconfig on
+  the device — and the same `voice/turn.c` turns them into the same requests.
+- A chat model answers by default and the question is said back when the
+  brain is set to `echo`. Both builds do whichever they were told to.
 - `make check` still passes with no oMLX server running and no `voices/` in
   the tree.

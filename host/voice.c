@@ -14,11 +14,12 @@
  * watch cannot end up listening for different words or asking the server
  * different questions. Only what genuinely differs is here.
  *
- * The answer is the question, said back word for word. That is a mode rather
- * than a placeholder: it is the shortest path through the whole pipeline, so
- * a turn that breaks here breaks everywhere, and what comes out of the
- * speaker is exactly what the transcriber heard. A language model belongs
- * behind the same seam later — reply() is the only function that would change.
+ * The answer comes from a chat model when one is configured, and is the
+ * question said back when none is. The echo is a mode rather than a
+ * placeholder: it is the shortest path through the whole pipeline, so a turn
+ * that breaks there breaks everywhere, and what comes out of the speaker is
+ * exactly what the transcriber heard. Both live behind reply(), which is the
+ * only function that knows the difference.
  *
  * There is nothing to press. The watch wakes when its own name turns up in a
  * transcript and goes back to the clock on a goodbye or a stretch of silence,
@@ -33,12 +34,18 @@
  *   timers and hands two to ui_status_set() and one to ui_view_set(). Nothing
  *   else crosses.
  *
- * - **No libraries beyond SDL2.** SPEC.md allows LVGL and SDL2 and nothing
- *   else, so the HTTP client below is a socket, a request written by hand and
- *   a reply read back. That is not an inconvenience: the device speaks to the
- *   same two endpoints through esp_http_client, and a body built by hand ports
- *   where a libcurl call site would not — which is why voice/turn.c builds
- *   both bodies and neither platform does.
+ * - **A socket and OpenSSL, and nothing above them.** SPEC.md allows LVGL,
+ *   SDL2 and OpenSSL, so the HTTP client below is still a request written by
+ *   hand and a reply read back — OpenSSL replaces send() and recv() and
+ *   nothing else. That is not an inconvenience: the device speaks to the same
+ *   three endpoints through esp_http_client, and a body built by hand ports
+ *   where a libcurl call site would not, which is why voice/turn.c builds all
+ *   three bodies and neither platform does.
+ *
+ *   TLS is here because the server may not be on this desk. omlx.ai-at-home.de
+ *   answers 308 on port 80, so a watch that talks to it over the internet has
+ *   no plaintext option; an oMLX on the same machine still does, and an
+ *   http:// address skips all of this.
  *
  * - **chatterbox-multilingual-v3 ships no voice conditionals**, so it answers
  *   500 to every request that carries no clip to clone. voices/kai.opus and
@@ -52,6 +59,8 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,15 +71,28 @@
 #include "turn.h"
 #include "voice.h"
 
-/* Where the server is. The two model names and the language are not here:
- * they are the same decision on both platforms, so they live in turn.h. */
-#define VOICE_HOST "127.0.0.1"
-#define VOICE_PORT "8000"
+/* Everything about the server, out of the environment, read once at start-up.
+ * The device reads the same seven settings out of menuconfig and calls the
+ * same three setters with them, which is why they are named alike: what the
+ * simulator is told and what the watch is told have to be the one list, or
+ * the simulator stops standing in for anything.
+ *
+ * The environment rather than a header because one of them is a secret. A key
+ * compiled in is a key committed, and this repository is public; the rest
+ * follow it so that configuring the simulator is one kind of act and not two.
+ * `make run` inherits the shell, so an exported variable is already there. */
+#define VOICE_ENV_URL      "WATCH_VOICE_URL"
+#define VOICE_ENV_KEY      "WATCH_VOICE_KEY"
+#define VOICE_ENV_STT      "WATCH_STT_MODEL"
+#define VOICE_ENV_BRAIN    "WATCH_BRAIN_MODEL"
+#define VOICE_ENV_TTS      "WATCH_TTS_MODEL"
+#define VOICE_ENV_LANGUAGE "WATCH_LANGUAGE"
+#define VOICE_ENV_WAKE     "WATCH_WAKE_PHRASE"
 
-/* What the watch answers to, spellings separated by '|'. Empty is turn.c's
- * own list, which is where the default is written down — see voice_wake_set().
- * The device has the same setting under menuconfig. */
-#define VOICE_WAKE_PHRASE ""
+/* An oMLX on this machine, which is what a simulator usually has in front of
+ * it, and the one address that needs no TLS and no key. */
+#define VOICE_URL_DEFAULT "http://127.0.0.1:8000"
+
 
 /* The voice KAI borrows, relative to the working directory — `make run`
  * starts the binary from the repository root. Both are gitignored: the clip
@@ -78,20 +100,20 @@
 #define VOICE_REF_AUDIO "voices/kai.opus"
 #define VOICE_REF_TEXT  "voices/kai.txt"
 
-/* Transcription answers in about a second and synthesis takes roughly as long
- * as the speech it produces, so the budget is the ceiling for a stalled server
- * rather than a working one. The socket gives up far sooner than that and the
- * read loop simply goes round again, which is what makes closing the window
- * during a request cost a second rather than two minutes: the loop notices the
- * shutdown between waits. */
+/* Transcription answers in about a second, a chat model in several, and
+ * synthesis takes roughly as long as the speech it produces, so the budget is
+ * the ceiling for a stalled server rather than a working one. The socket gives
+ * up far sooner than that and the read loop simply goes round again, which is
+ * what makes closing the window during a request cost a second rather than two
+ * minutes: the loop notices the shutdown between waits. */
 #define VOICE_HTTP_TIMEOUT_S 120
 #define VOICE_RECV_TIMEOUT_S 1
 
 /* ------------------------------------------------------------------ */
 /* HTTP. One connection per request, closed at the end of it: a turn makes    */
-/* two requests seconds apart, so a keep-alive pool would be bookkeeping for  */
-/* nothing. Plaintext to localhost — no TLS, no redirects, and both services  */
-/* answer with a Content-Length.                                              */
+/* three requests seconds apart, so a keep-alive pool would be bookkeeping     */
+/* for nothing. No redirects — the address is asked for exactly what it        */
+/* publishes — and all three services answer with a Content-Length.            */
 /* ------------------------------------------------------------------ */
 
 /* The loop's state, up here because a request in flight has to be able to see
@@ -101,16 +123,171 @@ static SDL_atomic_t recording; /* the microphone is dequeuing */
 static SDL_atomic_t speaking;
 static SDL_atomic_t running;
 
-static bool send_all(int fd, const void * bytes, size_t len)
+/* The server, and what it wants to see. Both are read once, at start-up. */
+static voice_url_t server;
+static char        api_key[VOICE_KEY_BYTES];
+static SSL_CTX *   tls;
+
+/* One connection. The socket is always there; the SSL sits on top of it when
+ * the address said https, and every byte of a request goes through the two
+ * functions below so the request itself is written in exactly one place
+ * whichever it is. */
+typedef struct {
+    int   fd;
+    SSL * ssl;
+} conn_t;
+
+static void conn_close(conn_t * c)
+{
+    if (c->ssl != NULL) {
+        SSL_shutdown(c->ssl);
+        SSL_free(c->ssl);
+        c->ssl = NULL;
+    }
+    if (c->fd >= 0) {
+        close(c->fd);
+        c->fd = -1;
+    }
+}
+
+/* The most recent OpenSSL failure as a sentence, because "SSL_connect failed"
+ * on its own has sent people to the wrong end of the problem before. */
+static const char * tls_error(void)
+{
+    static char text[160];
+    unsigned long code = ERR_get_error();
+
+    if (code == 0) return strerror(errno);
+    ERR_error_string_n(code, text, sizeof text);
+    return text;
+}
+
+static bool conn_open(conn_t * c)
+{
+    struct addrinfo hints, * found = NULL;
+    struct timeval timeout;
+    int rc;
+
+    c->fd = -1;
+    c->ssl = NULL;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    rc = getaddrinfo(server.host, server.port, &hints, &found);
+    if (rc != 0 || found == NULL) {
+        SDL_Log("voice: %s: %s", server.host, gai_strerror(rc));
+        return false;
+    }
+
+    c->fd = socket(found->ai_family, found->ai_socktype, found->ai_protocol);
+    if (c->fd < 0) {
+        freeaddrinfo(found);
+        return false;
+    }
+
+    /* A short read timeout rather than a long one: the loop goes round on it
+     * and looks at whether the window was closed, which is what makes closing
+     * it during a request cost a second rather than two minutes. */
+    timeout.tv_sec = VOICE_RECV_TIMEOUT_S;
+    timeout.tv_usec = 0;
+    setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    timeout.tv_sec = VOICE_HTTP_TIMEOUT_S;
+    setsockopt(c->fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    if (connect(c->fd, found->ai_addr, found->ai_addrlen) != 0) {
+        SDL_Log("voice: %s:%s is not answering — is there a server there?",
+                server.host, server.port);
+        freeaddrinfo(found);
+        conn_close(c);
+        return false;
+    }
+    freeaddrinfo(found);
+
+    if (!server.tls) return true;
+
+    c->ssl = SSL_new(tls);
+    if (c->ssl == NULL) {
+        conn_close(c);
+        return false;
+    }
+    /* Two calls, two different jobs, and leaving either out is a quiet
+     * failure. SNI is how a proxy that fronts several names knows which
+     * certificate to present — without it Caddy answers with the wrong site
+     * or none. set1_host is what makes OpenSSL check that the certificate it
+     * got actually belongs to the name we asked for; verification without it
+     * proves only that some CA signed something. */
+    SSL_set_tlsext_host_name(c->ssl, server.host);
+    SSL_set1_host(c->ssl, server.host);
+    SSL_set_fd(c->ssl, c->fd);
+
+    if (SSL_connect(c->ssl) != 1) {
+        long verify = SSL_get_verify_result(c->ssl);
+        if (verify != X509_V_OK) {
+            SDL_Log("voice: %s: the certificate did not check out: %s",
+                    server.host, X509_verify_cert_error_string(verify));
+        }
+        else {
+            SDL_Log("voice: %s: TLS failed: %s", server.host, tls_error());
+        }
+        conn_close(c);
+        return false;
+    }
+    return true;
+}
+
+static bool conn_send(conn_t * c, const void * bytes, size_t len)
 {
     const char * at = bytes;
+
     while (len > 0) {
-        ssize_t sent = send(fd, at, len, 0);
+        int sent = c->ssl != NULL
+                       ? SSL_write(c->ssl, at, (int) len)
+                       : (int) send(c->fd, at, len, 0);
         if (sent <= 0) return false;
         at += sent;
         len -= (size_t) sent;
     }
     return true;
+}
+
+/* Bytes, or 0 for the end of the stream, -1 for nothing yet, -2 for broken.
+ * The three are kept apart because the read loop treats them differently: it
+ * goes round on "nothing yet" to look at whether the window was closed, and a
+ * stream that ended is the ordinary way a reply finishes here. */
+#define CONN_AGAIN  (-1)
+#define CONN_BROKEN (-2)
+
+static int conn_recv(conn_t * c, void * bytes, size_t len)
+{
+    int got;
+
+    if (c->ssl == NULL) {
+        ssize_t n = recv(c->fd, bytes, len, 0);
+        if (n >= 0) return (int) n;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return CONN_AGAIN;
+        return CONN_BROKEN;
+    }
+
+    got = SSL_read(c->ssl, bytes, (int) len);
+    if (got > 0) return got;
+
+    switch (SSL_get_error(c->ssl, got)) {
+        case SSL_ERROR_ZERO_RETURN:
+            return 0; /* closed properly, with a close_notify */
+        case SSL_ERROR_WANT_READ:
+        case SSL_ERROR_WANT_WRITE:
+            return CONN_AGAIN;
+        case SSL_ERROR_SYSCALL:
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return CONN_AGAIN;
+            /* Closed without a close_notify, which plenty of servers do. The
+             * body is already in hand, so this is the end of it and not a
+             * failure to report. */
+            if (errno == 0) return 0;
+            return CONN_BROKEN;
+        default:
+            return CONN_BROKEN;
+    }
 }
 
 /* The value of one header, lower-cased comparison, into out. */
@@ -138,64 +315,59 @@ static bool header_value(const char * headers, const char * name, char * out, si
 
 /* POSTs body to path and returns the reply body in out, with its content type
  * in mime. Reports the server's own status and the head of its message on a
- * failure: it is the fastest route to the cause, and both services answer a
- * bad request with a sentence saying what was wrong. */
+ * failure: it is the fastest route to the cause, and all three services answer
+ * a bad request with a sentence saying what was wrong. */
 static bool http_post(const char * path, const char * content_type,
                       const void * body, size_t body_len,
                       voice_buf_t * out, char * mime, size_t mime_cap)
 {
-    struct addrinfo hints, * found = NULL;
-    struct timeval timeout;
-    char head[512];
+    conn_t conn;
+    char head[1024];
+    char host_header[VOICE_HOST_BYTES + VOICE_PORT_BYTES + 2];
+    char auth[VOICE_KEY_BYTES + 32];
     voice_buf_t raw = { 0 };
     const char * split;
     char length_header[32];
     size_t header_len, want;
-    int fd, status = 0, rc, waited;
+    int status = 0, waited;
     bool ok = false;
 
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    rc = getaddrinfo(VOICE_HOST, VOICE_PORT, &hints, &found);
-    if (rc != 0 || found == NULL) {
-        SDL_Log("voice: %s: %s", VOICE_HOST, gai_strerror(rc));
-        return false;
+    if (!conn_open(&conn)) return false;
+
+    /* The port comes off when it is the scheme's own, which is what every
+     * other client sends and what a proxy matching on the name expects. */
+    if ((server.tls && strcmp(server.port, "443") == 0) ||
+        (!server.tls && strcmp(server.port, "80") == 0)) {
+        snprintf(host_header, sizeof host_header, "%s", server.host);
+    }
+    else {
+        snprintf(host_header, sizeof host_header, "%s:%s", server.host, server.port);
     }
 
-    fd = socket(found->ai_family, found->ai_socktype, found->ai_protocol);
-    if (fd < 0) {
-        freeaddrinfo(found);
-        return false;
+    /* No key, no header. A server that wants none is not sent an empty one:
+     * an "Authorization: Bearer " with nothing behind it is a rejected
+     * request rather than an unauthenticated one. */
+    if (api_key[0] != '\0') {
+        snprintf(auth, sizeof auth, "Authorization: Bearer %s\r\n", api_key);
     }
-
-    timeout.tv_sec = VOICE_RECV_TIMEOUT_S;
-    timeout.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    timeout.tv_sec = VOICE_HTTP_TIMEOUT_S; /* localhost never blocks on a send */
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-    if (connect(fd, found->ai_addr, found->ai_addrlen) != 0) {
-        SDL_Log("voice: %s:%s is not answering — is oMLX running?", VOICE_HOST, VOICE_PORT);
-        freeaddrinfo(found);
-        close(fd);
-        return false;
+    else {
+        auth[0] = '\0';
     }
-    freeaddrinfo(found);
 
     snprintf(head, sizeof(head),
              "POST %s HTTP/1.1\r\n"
-             "Host: " VOICE_HOST ":" VOICE_PORT "\r\n"
+             "Host: %s\r\n"
+             "%s"
              "Content-Type: %s\r\n"
              "Content-Length: %zu\r\n"
              "Accept: */*\r\n"
              "Connection: close\r\n"
              "\r\n",
-             path, content_type, body_len);
+             path, host_header, auth, content_type, body_len);
 
-    if (!send_all(fd, head, strlen(head)) || !send_all(fd, body, body_len)) {
+    if (!conn_send(&conn, head, strlen(head)) || !conn_send(&conn, body, body_len)) {
         SDL_Log("voice: sending to %s failed", path);
-        close(fd);
+        conn_close(&conn);
         return false;
     }
 
@@ -203,10 +375,10 @@ static bool http_post(const char * path, const char * content_type,
      * chunked framing to unpick. */
     for (waited = 0; waited < VOICE_HTTP_TIMEOUT_S; ) {
         char chunk[8192];
-        ssize_t got = recv(fd, chunk, sizeof(chunk), 0);
+        int got = conn_recv(&conn, chunk, sizeof(chunk));
         if (got == 0) break;
-        if (got < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) goto done;
+        if (got == CONN_BROKEN) goto done;
+        if (got == CONN_AGAIN) {
             /* Nothing yet. Go round, unless the window has been closed — this
              * is the only place a request in flight can be abandoned. */
             waited += VOICE_RECV_TIMEOUT_S;
@@ -231,11 +403,14 @@ static bool http_post(const char * path, const char * content_type,
 
     if (status != 200) {
         SDL_Log("voice: %s: HTTP %d: %.200s", path, status, raw.data + header_len);
+        if (status == 401 || status == 403) {
+            SDL_Log("voice: the server wants a key — set %s", VOICE_ENV_KEY);
+        }
         goto done;
     }
 
     /* Content-Length when it is there, the rest of the stream when it is
-     * not. Both services send one. */
+     * not. All three services send one. */
     want = raw.len - header_len;
     if (header_value(raw.data, "content-length", length_header, sizeof(length_header))) {
         size_t claimed = strtoul(length_header, NULL, 10);
@@ -248,7 +423,7 @@ static bool http_post(const char * path, const char * content_type,
     ok = voice_buf_add(out, raw.data + header_len, want);
 
 done:
-    close(fd);
+    conn_close(&conn);
     voice_buf_free(&raw);
     return ok;
 }
@@ -428,15 +603,38 @@ static void play(const unsigned char * file, size_t len)
     SDL_AtomicSet(&speaking, 0);
 }
 
-/* What the assistant answers. Word for word, with nothing in front of it: the
- * point of this mode is to hear what the microphone and the transcriber
- * actually produced, and a preamble is both an extra sentence to sit through
- * and a way to miss that the transcript was wrong.
+/* What the assistant answers, into out.
  *
- * This is the seam a language model goes behind. */
-static const char * reply(const char * heard)
+ * With no brain configured this is the question said back, word for word and
+ * with nothing in front of it: the point of that mode is to hear what the
+ * microphone and the transcriber actually produced, and a preamble is both an
+ * extra sentence to sit through and a way to miss that the transcript was
+ * wrong. It is also the only mode that needs no third service.
+ *
+ * With one configured, the same words go to a chat model and its answer comes
+ * back. A failure here is silence rather than an echo: a watch that repeats
+ * the question when the model could not be reached looks like it answered. */
+static bool reply(const char * heard, char * out, size_t cap)
 {
-    return heard;
+    voice_buf_t body = { 0 }, answer = { 0 };
+    bool ok = false;
+
+    if (voice_models_get()->brain[0] == '\0') {
+        snprintf(out, cap, "%s", heard);
+        return true;
+    }
+
+    if (!voice_brain_body(&body, heard)) goto done;
+    if (!http_post(VOICE_BRAIN_PATH, VOICE_BRAIN_TYPE, body.data, body.len,
+                   &answer, NULL, 0)) goto done;
+
+    ok = voice_brain_text(answer.data, out, cap);
+    if (!ok) SDL_Log("voice: no answer in what %s sent back", voice_models_get()->brain);
+
+done:
+    voice_buf_free(&body);
+    voice_buf_free(&answer);
+    return ok;
 }
 
 /* One pass is one utterance. Asleep, the only thing that matters about it is
@@ -452,6 +650,7 @@ static int loop(void * unused)
 
     while (SDL_AtomicGet(&running)) {
         char heard[VOICE_MAX_TEXT];
+        char answer[VOICE_MAX_TEXT];
         voice_buf_t wav = { 0 };
         const char * say;
         size_t samples;
@@ -491,7 +690,10 @@ static int loop(void * unused)
             SDL_Log("voice: heard \"%s\"", heard);
         }
 
-        if (synthesise(reply(say), &wav)) {
+        if (!reply(say, answer, sizeof answer)) continue;
+        if (voice_models_get()->brain[0] != '\0') SDL_Log("voice: answering \"%s\"", answer);
+
+        if (synthesise(answer, &wav)) {
             play((const unsigned char *) wav.data, wav.len);
         }
         voice_buf_free(&wav);
@@ -566,13 +768,78 @@ static bool load_voice(void)
     return ref_audio != NULL;
 }
 
+/* One setting, or the fallback when it is unset or empty. Empty is treated as
+ * unset throughout: an exported variable someone cleared should mean the same
+ * as one they never wrote. */
+static const char * env(const char * name, const char * fallback)
+{
+    const char * value = getenv(name);
+
+    return (value != NULL && value[0] != '\0') ? value : fallback;
+}
+
+/* Everything the platform knows and turn.c does not: where the server is,
+ * what it wants to see, which models answer and what the watch is called.
+ * The device does the same six reads out of menuconfig.
+ *
+ * False means there is nowhere to ask, which is a clock and not an error —
+ * the same answer a missing clip gives. */
+static bool configure(void)
+{
+    voice_models_t models;
+    const char * url = env(VOICE_ENV_URL, VOICE_URL_DEFAULT);
+
+    if (!voice_url_parse(url, &server)) {
+        SDL_Log("voice: %s is not an address this can dial (%s) — the watch stays a clock",
+                url, VOICE_ENV_URL);
+        return false;
+    }
+    snprintf(api_key, sizeof api_key, "%s", env(VOICE_ENV_KEY, ""));
+
+    /* NULL rather than the default spelled out again: an unset variable says
+     * nothing and turn.c uses the one list it holds. */
+    models.stt = env(VOICE_ENV_STT, NULL);
+    models.brain = env(VOICE_ENV_BRAIN, NULL);
+    models.tts = env(VOICE_ENV_TTS, NULL);
+    models.language = env(VOICE_ENV_LANGUAGE, NULL);
+    if (!voice_models_set(&models)) {
+        SDL_Log("voice: a model name does not fit — using the default for it");
+    }
+    if (!voice_wake_set(env(VOICE_ENV_WAKE, NULL))) {
+        SDL_Log("voice: that wake phrase does not fit — listening for the default");
+    }
+
+    if (server.tls) {
+        tls = SSL_CTX_new(TLS_client_method());
+        if (tls == NULL) {
+            SDL_Log("voice: no TLS: %s", tls_error());
+            return false;
+        }
+        /* Verification on, and the system CA store behind it. Off, an https
+         * address would prove nothing at all — which is worse than the
+         * plaintext it replaced, because it looks like it proved something. */
+        SSL_CTX_set_verify(tls, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_min_proto_version(tls, TLS1_2_VERSION);
+        if (SSL_CTX_set_default_verify_paths(tls) != 1) {
+            SDL_Log("voice: no CA store, so no certificate can be checked: %s",
+                    tls_error());
+            return false;
+        }
+    }
+
+    /* The key is never logged, only whether there is one — this is the log a
+     * screenshot goes into. */
+    SDL_Log("voice: %s://%s:%s, %s key",
+            server.tls ? "https" : "http", server.host, server.port,
+            api_key[0] != '\0' ? "with a" : "with no");
+    return true;
+}
+
 void voice_start(void)
 {
     SDL_AudioSpec want, have;
 
-    if (!voice_wake_set(VOICE_WAKE_PHRASE)) {
-        SDL_Log("voice: that wake phrase does not fit — listening for the default");
-    }
+    if (!configure()) return;
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         SDL_Log("voice: no audio: %s", SDL_GetError());
@@ -614,7 +881,14 @@ void voice_start(void)
         return;
     }
     SDL_Log("voice: waiting to be called, hearing through %s and speaking as %s",
-            VOICE_STT_MODEL, VOICE_TTS_MODEL);
+            voice_models_get()->stt, voice_models_get()->tts);
+    if (voice_models_get()->brain[0] != '\0') {
+        SDL_Log("voice: thinking with %s", voice_models_get()->brain);
+    }
+    else {
+        SDL_Log("voice: %s=%s — the answer is the question said back",
+                VOICE_ENV_BRAIN, VOICE_BRAIN_ECHO);
+    }
 }
 
 void voice_stop(void)
@@ -633,6 +907,10 @@ void voice_stop(void)
     free(ref_text);
     pcm = NULL;
     ref_audio = ref_text = NULL;
+    if (tls != NULL) {
+        SSL_CTX_free(tls);
+        tls = NULL;
+    }
 }
 
 bool voice_awake(void)

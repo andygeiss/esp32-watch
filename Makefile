@@ -52,9 +52,15 @@ firmware:
 flash:
 	idf.py -C firmware flash monitor
 
+# Loads .env when it is there, so a local start is one command — the address
+# of the speech server, its key, and which models answer. Only run: check and
+# test MUST NOT depend on a developer's machine, which is the baseline's rule
+# 6, and neither of them speaks to a server anyway. One shell line, because
+# each recipe line gets its own shell.
+#
 # Close the window to exit: LV_SDL_DIRECT_EXIT is 1.
 run: build
-	./$(BIN)
+	set -a; if [ -f .env ]; then . ./.env; fi; set +a; ./$(BIN)
 
 # The inner loop: the last gate of check, without the rest of them.
 test: build

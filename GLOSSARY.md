@@ -82,9 +82,16 @@ the two eyes: never merged into one label, never given a separator between
 them. _Avoid: digit pair, half, cluster._
 
 **Heard** — the transcript of one turn, as Parakeet returned it. It is what
-the assistant says back, word for word, because the point of the echo is to
-hear what the microphone and the transcriber actually produced. _Avoid:
-utterance, query, prompt._
+goes to the brain, and with no brain configured it is also what comes back:
+the point of the echo is to hear what the microphone and the transcriber
+actually produced. _Avoid: utterance, query, prompt._
+
+**Brain** — the chat model that answers, and the seam it sits behind.
+`reply()` is that seam on both builds: `Qwen3.8-27B-oQ4e-mtp` by default, any
+model `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` names, and the heard
+text said back when either says **echo**. Not "the LLM" and not "the AI" — the
+watch has three services and this is the one that thinks. _Avoid: LLM, model
+(unqualified), AI, assistant._
 
 **Host** — the machine a build runs the simulator on, as opposed to the device.
 Also the half of any build that knows which of the two it is: window or panel,
@@ -151,12 +158,13 @@ interaction._
 views on it, and the morph is how it gets from one to the other. _Avoid:
 screen, page, mode._
 
-**Voice loop** — the microphone, Parakeet, Chatterbox and the speaker, on a
-thread of its own, and the reason the bottom two corners are not faked. Three
-files: `voice/turn.c` is the portable half both builds share, `host/voice.c`
-drives SDL and a socket, `firmware/main/voice.c` drives the board's two codecs
-and `esp_http_client`. The two platform halves are the same shape on purpose.
-_Avoid: audio pipeline, speech stack, assistant backend._
+**Voice loop** — the microphone, Parakeet, the brain, Chatterbox and the
+speaker, on a thread of its own, and the reason the bottom two corners are not
+faked. Three files: `voice/turn.c` is the portable half both builds share,
+`host/voice.c` drives SDL and a hand-written request over a socket or OpenSSL,
+`firmware/main/voice.c` drives the board's two codecs and `esp_http_client`.
+The two platform halves are the same shape on purpose. _Avoid: audio pipeline,
+speech stack, assistant backend._
 
 **Wake phrase** — `Hey Kai`, and the thing that puts the assistant view up.
 There is no wake-word engine on either build, so the microphone stays open,
@@ -164,7 +172,7 @@ every utterance is transcribed, and the phrase is looked for in the text —
 `WAKE` in `voice/turn.c` is a table because the transcriber has never been
 shown the name and spells it several ways. Whatever follows it is the first
 turn. The phrase is configuration and the table is its default:
-`VOICE_WAKE_PHRASE` on the host and `CONFIG_WATCH_WAKE_PHRASE` on the device
+`WATCH_WAKE_PHRASE` on the host and `CONFIG_WATCH_WAKE_PHRASE` on the device
 hand `voice_wake_set()` a `|`-separated list, and an empty one means the
 table. On the watch the transcriber-as-wake-word is a choice rather than a
 necessity: ESP-SR would hear it locally, but none of WakeNet's models is this
