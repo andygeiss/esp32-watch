@@ -32,10 +32,12 @@ make flash      # onto the board, then its log
 
 Amber on black, the way a VFD readout looks. Say `Hey Kai` and each digit group
 pulls in to an eye over 400 ms while the digits fade off the front of it — a
-69 px circle with a pupil in it and a catchlight in that, a good deal narrower
-than the digits were, because it is the black left between the two that makes
-them read as a pair. The eyes then blink, 140 ms every 3.6 s. A goodbye, or half a minute
-with nothing said, runs it backwards. Nothing moves in between — only size and opacity
+69 px circle with a pupil in it, a catchlight in that and four lashes fanning
+off its outer corner, a good deal narrower than the digits were, because it is
+the black left between the two that makes them read as a pair. The lashes are
+what make the pair a woman's, which is the face agreeing with the voice. The
+eyes then blink, 140 ms every 3.6 s. A goodbye, or half a minute with nothing
+said, runs it backwards. Nothing moves in between — only size and opacity
 animate, which is why the hour and the minute have to stay two separate objects
 placed symmetrically about the centre. They are the two eyes.
 

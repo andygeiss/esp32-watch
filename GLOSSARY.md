@@ -56,9 +56,9 @@ four corner readouts are derived from it, and it is what caps the digits at
 118 px. _Avoid: padding, inset, safe area._
 
 **Eye** — one of the two amber circles the assistant looks out of, 69 px
-across, with a pupil and a catchlight in it. Each starts life as its digit
-group's own box — same size, same centre, already round, invisible — so the
-morph is that box changing shape rather than a new thing appearing. It is
+across, with a pupil, a catchlight and four lashes. Each starts life as its
+digit group's own box — same size, same centre, already round, invisible — so
+the morph is that box changing shape rather than a new thing appearing. It is
 narrower than that box on purpose: what is left black between the two is what
 makes them read as a pair rather than as two discs. _Avoid: iris, dot, ball._
 
@@ -97,6 +97,13 @@ watch has three services and this is the one that thinks. _Avoid: LLM, model
 Also the half of any build that knows which of the two it is: window or panel,
 mouse or touch, `SDL_GetTicks` or `esp_timer`. _Avoid: PC, desktop, simulator
 side._
+
+**Lash** — one of the four amber strokes on an eye's upper-outer arc, and the
+whole of what makes the pair a woman's rather than anybody's. Longest at the
+outer corner, 22 px, shortening to 14 px going in; the right eye's four are the
+left's mirrored about the vertical. Drawn by the eye rather than built out of
+objects, because nothing that can be sized in percent stays put on an eye that
+is not square. _Avoid: eyelash, spoke, ray, whisker._
 
 **Lid** — the eye's own padding, `UI_EYE_LID`, 6 px on every side. Half the
 12 px the eye shuts to, so the top and bottom meet exactly as the blink bottoms

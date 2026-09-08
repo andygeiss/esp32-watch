@@ -461,6 +461,17 @@ there is one light in the room. Neither is decoration: the pupil and the
 catchlight are what tell an eye from a dot, and two discs the width of the
 digit groups read as two discs.
 
+**The eyes are a woman's, and the lashes are the whole of what says so.** Four
+to an eye, on its upper-outer arc, 22 px at the outer corner shortening to
+14 px going in — a fan rather than a sunburst, which is the difference between
+a pair of lashes and a pair of suns. The right eye's four are the left's
+mirrored about the vertical, which is `540 - a` and not `360 - a`; the wrong
+one of those puts them under the eye. This is the face agreeing with the voice:
+`tools/gen_voice.sh` has spoken the reference clip in a woman's since it was
+written, and the face was the last thing left disagreeing with it. The longest
+lash ends 55 px from the edge of the panel, so the margin rule below is
+nowhere near binding.
+
 The eye is smaller than the gap it sits beside, and by some way — 69 px of eye
 with 119 px of black between the pair, where a face has roughly an eye's width
 between the two. That is a deliberate choice of look and not a derived number:
@@ -489,6 +500,37 @@ child against its parent's content box and scales its opacity by its parent's,
 so both follow the eye down and back out and fade with it — there is still one
 animation per property per eye. Give either a size of its own and it sits there
 while the eye moves around it.
+
+**The lashes are drawn rather than built, and that is not a preference.**
+Everything else inside an eye is an object sized in percent, and a lash cannot
+be one: it has to sit outside the eye and at an angle, and both of the ways
+LVGL offers for that come apart as soon as the eye stops being square — which
+it is for every frame of the morph and every frame of a blink. An `lv_arc`
+each is the obvious answer and looks right at rest, which is what makes it the
+expensive one to find out about: an arc puts its centre `min(w, h) / 2` in
+from its own top-left corner, so the moment the eye flattens the whole ring
+slides left, and the left eye's lashes swing out into the black while the
+right eye's sink into the amber and disappear. A rotated bar is worse again —
+`LV_DRAW_TRANSFORM_USE_MATRIX` is 0, so LVGL can only honour a rotation by
+rendering the object into a layer of its own, and eight of those a frame is
+not a thing to hand the device.
+
+So `eye_draw_lashes()` draws eight lines on `LV_EVENT_DRAW_MAIN_END` and there
+are no lash objects at all. The base of each rides the ellipse of the eye's
+live box, so the fan folds down with the lid and pulls in with the morph on
+its own; the stroke takes the eye's own opacity, so it fades with it. That is
+the same bargain the pupil and the catchlight strike by being percentages,
+made the only way left once the shape stops being a rectangle — and it adds
+nothing animated. It is still the eye's width, its height and its opacity.
+
+**A lash reaches past the eye's own box, so the eye has to say how far.** LVGL
+asks that by event — `LV_EVENT_REFR_EXT_DRAW_SIZE` — rather than reading it
+from a style, and the answer is what both the clip area for the eye's own
+drawing and the area invalidated when it changes are grown by. Answer too
+small and the lashes are quietly cut off at that distance; leave the event off
+and they are drawn but never invalidated, which on the panel's strip renderer
+is a smear rather than a missing lash. `eye_ext_draw_size()` reads the longest
+lash off the table instead of repeating the number beside it.
 
 **The blink** is one infinite animation per eye, started by the morph's own
 completion callback: the height pulls in to a 12 px line over 70 ms, back out
@@ -885,9 +927,10 @@ it, and `make test` runs it: it creates a display with
 `LV_DISPLAY_RENDER_MODE_FULL` over a plain `uint8_t` buffer, calls
 `ui_build()`, steps a fake tick source, drives `ui_view_set()` the way
 `host/main.c` does, and checks geometry, opacity, label text and the pixels
-themselves. 93 checks. Fifteen of them have been made to fail on purpose,
-seven from before the eye got a pupil and eight since. The first seven: fading a corner
-readout out with the clock, putting the edge margin back to 16, letting the
+themselves. 108 checks. Thirty of them have been made to fail on purpose:
+seven from before the eye got a pupil, eight from the eye itself and fifteen
+from the lashes. The first seven: fading a corner readout out with the clock,
+putting the edge margin back to 16, letting the
 eyes keep `LV_OBJ_FLAG_CLICKABLE`, leaving `UI_STACK_TOP` reserving the strip
 the button used to sit in, and three ways of getting `ui_view_set()` wrong —
 flipping which flag means which view, restarting the morph when told the view
@@ -915,6 +958,26 @@ checks here that can tell an eye from a dot — the geometry is the same either
 way, and those three probe points are derived from the eye's size rather than
 typed in, because a probe left behind at the old geometry lands on the wrong
 thing and still passes.
+
+The last fifteen are the lashes', and every one of them reads pixels, because
+a lash is drawn rather than built and so leaves no geometry to ask about. The
+probes are derived the same way: a point half way along each lash, off the
+eye's own live box. Taken off altogether; mirrored about the horizontal
+instead of the vertical, which is the `360 - a` that puts the right eye's four
+under it; mirrored onto the inner side of both eyes, which the geometry cannot
+tell from the right way round; drawn on the left eye only; and given an
+opacity of its own, so that a lash outlives the eye and shows on the clock
+face — out past the digit group's box, which is wider than the eye, so the
+same probe catches it crossing the edge margin too.
+
+The one that earns its keep is centring the fan the way `lv_arc` centres
+itself. It passes every other check in the file, because at rest the eye is
+square and the two are the same thing. What catches it is counting the lit
+pixels either side of the centre line with the lid part way down: the fan
+slides the same way on both eyes, which is out into the black on one and into
+the amber on the other. That check needs one care of its own — `lv_refr_now()`
+steps the animations as well as drawing them, so the height that goes in the
+failure message has to be read back after it, not before.
 
 Rebuild with the object removed when trying this:
 

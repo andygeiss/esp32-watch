@@ -101,6 +101,31 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 #define UI_CATCHLIGHT_PCT     30 /* of the pupil */
 #define UI_CATCHLIGHT_OFF_PCT (-20)
 
+/* The lashes, which are the whole of what makes this pair of eyes a woman's.
+ * The voice has been one since tools/gen_voice.sh made the reference clip,
+ * and the face was the last thing still disagreeing with it.
+ *
+ * Four to an eye, on its upper-outer arc, longest at the outer corner and
+ * shortening inwards — a fan rather than a sunburst, which is the difference
+ * between a pair of lashes and a pair of suns. The right eye's four are the
+ * left's mirrored about the vertical, so the two read as one face.
+ *
+ * LVGL measures angles from 3 o'clock and runs them clockwise, so 180-270 is
+ * the upper left — which is the left eye's outer side — and mirroring about
+ * the vertical is 540 - a. */
+#define UI_LASH_WIDTH 5 /* the stroke, in px */
+
+static const struct {
+    int32_t angle;  /* clockwise from 3 o'clock, on the left eye */
+    int32_t length; /* px out past the rim */
+} UI_LASHES[] = {
+    { 188, 22 },
+    { 208, 20 },
+    { 228, 17 },
+    { 248, 14 },
+};
+#define UI_LASH_COUNT ((int) (sizeof(UI_LASHES) / sizeof(UI_LASHES[0])))
+
 /* The corner readouts, in LVGL's built-in Montserrat because their symbols
  * come with it. A reading the platform does not have is dimmed, not hidden:
  * an empty corner reads as a bug, a dim one reads as "no". */
@@ -236,6 +261,78 @@ static lv_obj_t * disc_create(lv_obj_t * parent, int32_t w, int32_t h, uint32_t 
     return disc;
 }
 
+/* How far out past its own box the eye draws, which is the longest lash and
+ * the round cap on the end of it. Read off the table rather than written down
+ * a second time beside it: a lash longer than the answer given here is
+ * quietly cut off at it, and LVGL asks this by event rather than reading a
+ * style, so there is nowhere else to say it. */
+static void eye_ext_draw_size(lv_event_t * e)
+{
+    int32_t reach = 0;
+    int i;
+
+    for (i = 0; i < UI_LASH_COUNT; i++) {
+        if (UI_LASHES[i].length > reach) reach = UI_LASHES[i].length;
+    }
+    lv_event_set_ext_draw_size(e, reach + UI_LASH_WIDTH);
+}
+
+/* The lashes are drawn rather than built, which is the one way of putting
+ * them on that survives an eye which is not square — and it is not square for
+ * any frame of the morph or of a blink.
+ *
+ * An lv_arc each is the obvious way and the wrong one: an arc puts its centre
+ * min(w, h) / 2 in from its own top-left corner, so the moment the eye
+ * flattens the whole ring slides left, and the left eye's lashes swing out
+ * into the black while the right eye's sink into the amber and disappear. A
+ * rotated bar is worse again — LV_DRAW_TRANSFORM_USE_MATRIX is 0, so LVGL can
+ * only honour a rotation by rendering the object into a layer of its own, and
+ * eight of those a frame is not a thing to hand the device.
+ *
+ * Two points each is what it costs instead, and it buys the same bargain the
+ * pupil and the catchlight strike by being percentages: the base of a lash
+ * rides the ellipse of the eye's live box, so the fan closes with the lid and
+ * pulls in with the morph on its own, and the stroke takes the eye's own
+ * opacity, so it fades with it. Still nothing animated but the eye's width,
+ * its height and its opacity. */
+static void eye_draw_lashes(lv_event_t * e)
+{
+    lv_obj_t * eye = lv_event_get_current_target_obj(e);
+    lv_draw_line_dsc_t lash;
+    lv_area_t box;
+    int32_t cx, cy, rx, ry;
+    bool mirror;
+    int i;
+
+    lv_obj_get_coords(eye, &box);
+    rx = lv_area_get_width(&box) / 2;
+    ry = lv_area_get_height(&box) / 2;
+    cx = box.x1 + rx;
+    cy = box.y1 + ry;
+    mirror = cx > UI_PANEL_WIDTH / 2; /* the right eye is the one to mirror */
+
+    lv_draw_line_dsc_init(&lash);
+    lash.color = lv_color_hex(UI_COLOR_AMBER);
+    lash.opa = lv_obj_get_style_opa_recursive(eye, LV_PART_MAIN);
+    lash.width = UI_LASH_WIDTH;
+    lash.round_start = 1;
+    lash.round_end = 1;
+
+    for (i = 0; i < UI_LASH_COUNT; i++) {
+        int32_t angle = mirror ? 540 - UI_LASHES[i].angle : UI_LASHES[i].angle;
+        int32_t cos_a = lv_trigo_cos((int16_t) angle);
+        int32_t sin_a = lv_trigo_sin((int16_t) angle);
+        int32_t bx = cx + rx * cos_a / LV_TRIGO_SIN_MAX;
+        int32_t by = cy + ry * sin_a / LV_TRIGO_SIN_MAX;
+
+        lash.p1.x = bx;
+        lash.p1.y = by;
+        lash.p2.x = bx + UI_LASHES[i].length * cos_a / LV_TRIGO_SIN_MAX;
+        lash.p2.y = by + UI_LASHES[i].length * sin_a / LV_TRIGO_SIN_MAX;
+        lv_draw_line(lv_event_get_layer(e), &lash);
+    }
+}
+
 /* An eye starts as the digit group's own box, invisible behind it, so the
  * morph is that box changing shape rather than a new thing appearing.
  *
@@ -251,6 +348,8 @@ static lv_obj_t * eye_create(lv_obj_t * parent, int32_t offset_x)
     lv_obj_t * catchlight;
 
     lv_obj_set_style_pad_all(eye, UI_EYE_LID, LV_PART_MAIN);
+    lv_obj_add_event_cb(eye, eye_ext_draw_size, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+    lv_obj_add_event_cb(eye, eye_draw_lashes, LV_EVENT_DRAW_MAIN_END, NULL);
 
     pupil = disc_create(eye, lv_pct(UI_PUPIL_PCT), lv_pct(UI_PUPIL_PCT), UI_COLOR_BG);
     catchlight = disc_create(pupil, lv_pct(UI_CATCHLIGHT_PCT), lv_pct(UI_CATCHLIGHT_PCT),

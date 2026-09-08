@@ -36,6 +36,22 @@ LV_FONT_DECLARE(ui_font_assistant_18);
                            pupil close with the eye rather than sit in it */
 #define CATCHLIGHT_PCT     30 /* of the pupil */
 #define CATCHLIGHT_OFF_PCT (-20)
+#define EYE_SHUT_H   12 /* what the blink pulls the eye's height in to */
+#define LASH_WIDTH   5
+
+/* The lashes, spelled out again like the rest of it. LVGL's angles start at 3
+ * o'clock and run clockwise, so these four are the left eye's upper-outer
+ * arc; the right eye's are 540 minus each. */
+static const struct {
+    int32_t angle;
+    int32_t length;
+} LASHES[] = {
+    { 188, 22 },
+    { 208, 20 },
+    { 228, 17 },
+    { 248, 14 },
+};
+#define LASH_COUNT ((int) (sizeof(LASHES) / sizeof(LASHES[0])))
 
 /* What those work out to with the eye open. Derived rather than typed in, so
  * that changing the eye's size moves the pixels this test looks at with it —
@@ -116,6 +132,53 @@ static uint16_t pixel_at(int32_t x, int32_t y)
 {
     uint32_t i = (uint32_t) (y * PANEL_WIDTH + x);
     return (uint16_t) (buf[i * 2] | (buf[i * 2 + 1] << 8));
+}
+
+static int32_t lash_longest(void)
+{
+    int32_t longest = 0;
+    int i;
+
+    for (i = 0; i < LASH_COUNT; i++) {
+        if (LASHES[i].length > longest) longest = LASHES[i].length;
+    }
+    return longest;
+}
+
+/* A point half way along one lash of one eye, taken off the eye's own live
+ * box rather than typed in, so that changing the eye moves the probe with it.
+ * `mirror` asks for the same lash on the other side of the eye, which is
+ * where a lash goes if the mirroring is the wrong way round — the useful
+ * thing to find nothing at. */
+static void lash_point(lv_obj_t * eye, int i, bool mirror, int32_t * x, int32_t * y)
+{
+    int32_t rx = lv_obj_get_width(eye) / 2;
+    int32_t ry = lv_obj_get_height(eye) / 2;
+    int32_t cx = lv_obj_get_x(eye) + rx;
+    int32_t cy = lv_obj_get_y(eye) + ry;
+    int32_t angle = mirror ? 540 - LASHES[i].angle : LASHES[i].angle;
+    int32_t cos_a = lv_trigo_cos((int16_t) angle);
+    int32_t sin_a = lv_trigo_sin((int16_t) angle);
+
+    *x = cx + (rx + LASHES[i].length / 2) * cos_a / LV_TRIGO_SIN_MAX;
+    *y = cy + (ry + LASHES[i].length / 2) * sin_a / LV_TRIGO_SIN_MAX;
+}
+
+/* Lit pixels either side of the centre line, over the band the two eyes and
+ * their lashes are in and nothing else. */
+static void eye_band_lit(int32_t centre_y, uint32_t * left, uint32_t * right)
+{
+    int32_t reach = EYE_SIZE / 2 + lash_longest() + LASH_WIDTH;
+    int32_t x, y;
+
+    *left = *right = 0;
+    for (y = centre_y - reach; y <= centre_y + reach; y++) {
+        for (x = 0; x < PANEL_WIDTH; x++) {
+            if (pixel_at(x, y) == 0) continue;
+            if (x < PANEL_WIDTH / 2) (*left)++;
+            else (*right)++;
+        }
+    }
 }
 
 static int32_t right_of(lv_obj_t * obj)
@@ -457,6 +520,46 @@ int main(void)
               CATCHLIGHT_SIZE);
     }
 
+    /* The lashes, which are what makes the pair a woman's. Only the pixels can
+     * say anything about them: they are drawn by the eye rather than built out
+     * of objects, so there is no geometry to read. */
+    printf("lashes\n");
+    {
+        int e, i;
+
+        for (e = 0; e < 2; e++) {
+            lv_obj_t * eye = child(e == 0 ? EYE_LEFT : EYE_RIGHT);
+            int32_t x, y;
+
+            for (i = 0; i < LASH_COUNT; i++) {
+                lash_point(eye, i, e == 1, &x, &y);
+                CHECK(pixel_at(x, y) == AMBER_565,
+                      "%s eye: lash %d reads 0x%04X at (%d,%d)",
+                      e == 0 ? "left" : "right", i, pixel_at(x, y), x, y);
+            }
+
+            /* And nothing on the inner side. Mirroring the fan the wrong way
+             * puts every lash between the eyes, which the geometry cannot
+             * tell from the right way round. */
+            lash_point(eye, 0, e == 0, &x, &y);
+            CHECK(pixel_at(x, y) == 0,
+                  "%s eye: 0x%04X on its inner side — is the fan mirrored the "
+                  "wrong way?", e == 0 ? "left" : "right", pixel_at(x, y));
+        }
+    }
+
+    /* A mirrored pair has to weigh the same on both sides of the panel. This
+     * is the check that an eye which is not drawn from its own centre fails:
+     * the fan slides the same way on both eyes, which is out into the black on
+     * one of them and into the amber on the other, and every point probed
+     * above still lands on a lash. */
+    {
+        uint32_t left, right;
+        eye_band_lit(eye_centre_y, &left, &right);
+        CHECK(left > right ? left - right <= left / 50 : right - left <= right / 50,
+              "%u lit pixels on the left of the face and %u on the right", left, right);
+    }
+
     printf("blink\n");
     shortest = watch_blinks(9000, &blinks, NULL, &pupil_shortest);
     CHECK(blinks >= 2, "%d blinks in 9 s", blinks);
@@ -470,6 +573,34 @@ int main(void)
      * line. */
     CHECK(pupil_shortest == 0, "the eye shut to %d px with %d px of pupil still in it",
           shortest, pupil_shortest);
+
+    /* Still a pair with the lids down. An eye stops being square the moment it
+     * blinks, and that is exactly when a lash hung off anything but the eye's
+     * own live box goes wandering. */
+    {
+        lv_obj_t * eye = child(EYE_LEFT);
+        uint32_t t, left, right;
+        int32_t shut;
+
+        /* On to a frame with the lid down. lv_refr_now() steps the animations
+         * as well as drawing them, so the height belongs after that call and
+         * not before it: what read 12 px when this loop stopped is a few
+         * pixels open again in the frame that actually got drawn. Any height
+         * off the square will do — being off the square is the whole of what
+         * this is looking for. */
+        for (t = 0; t < 9000 && lv_obj_get_height(eye) == EYE_SIZE; t += 16) {
+            fake_tick += 16;
+            lv_timer_handler();
+        }
+        lv_refr_now(display);
+        shut = lv_obj_get_height(eye);
+        CHECK(shut < EYE_SIZE, "the eye never left %d px to be looked at mid-blink",
+              EYE_SIZE);
+        eye_band_lit(eye_centre_y, &left, &right);
+        CHECK(left > right ? left - right <= left / 50 : right - left <= right / 50,
+              "with the lid at %d px: %u lit pixels on the left of the face and %u "
+              "on the right", shut, left, right);
+    }
 
     /* The same stretch again, with the view re-asserted on every frame the
      * way main.c's timer does. Being told the view it is already in has to
@@ -486,6 +617,23 @@ int main(void)
     ui_view_set(false);
     pump(600);
     expect_clock_view("back on the clock");
+
+    /* The lashes go with the eye, because the stroke takes the eye's own
+     * opacity. Given one of its own it would still be drawn here — and out
+     * past the digit group's box, which is wider than the eye, so it would
+     * also be over the edge margin. One probe says both. */
+    {
+        int e;
+
+        lv_refr_now(display);
+        for (e = 0; e < 2; e++) {
+            int32_t x, y;
+            lash_point(child(e == 0 ? EYE_LEFT : EYE_RIGHT), 0, e == 1, &x, &y);
+            CHECK(pixel_at(x, y) == 0,
+                  "%s eye: 0x%04X at (%d,%d) on the clock face — a lash outlived "
+                  "the eye", e == 0 ? "left" : "right", pixel_at(x, y), x, y);
+        }
+    }
 
     shortest = watch_blinks(9000, &blinks, NULL, NULL);
     CHECK(blinks == 0, "the eye blinked %d times on the clock face", blinks);
