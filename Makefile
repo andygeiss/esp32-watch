@@ -6,7 +6,15 @@ BIN = build/kai_sim
 
 # Targets are alphabetical, so the default is named rather than first.
 .DEFAULT_GOAL = check
-.PHONY: build check ci clean firmware flash run test
+.PHONY: bench build check ci clean firmware flash run test
+
+# Where a turn's seconds go, against whichever server .env points at. Takes a
+# run count: `make bench RUNS=5`. Sources .env the way run does and for the
+# same reason — it needs an address and a key — which is exactly why it is not
+# in check: a gate that reads one machine's file is a gate that passes on one
+# machine, and this one also needs a server, a network and voices/.
+bench: build
+	set -a; if [ -f .env ]; then . ./.env; fi; set +a; ./build/kai_bench $(RUNS)
 
 # CMake owns the dependency tracking. Re-running the configure step costs
 # nothing and is what makes a fresh clone build in one command.

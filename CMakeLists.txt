@@ -64,17 +64,23 @@ target_include_directories(kai_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ui)
 add_library(kai_turn STATIC voice/turn.c)
 target_include_directories(kai_turn PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/voice)
 
-# host/voice.c is host-only, like main.c: the SDL microphone, the socket and
-# the SDL speaker, which is all that is left once voice/turn.c has the words,
-# the gate and the two request bodies. Deliberately not in kai_ui and not in
-# kai_test — `make test` has to pass with no oMLX server and no audio device
-# anywhere near it.
-# OpenSSL reaches kai_sim and nothing else. The speech server may be on the
-# other side of the internet — omlx.ai-at-home.de answers 308 on port 80 — so
-# host/voice.c needs TLS under its hand-written request. kai_test never links
-# voice.c, so the headless gate still needs nothing but a compiler.
-add_executable(kai_sim host/main.c host/voice.c)
+# host/speech.c and host/voice.c are host-only, like main.c: the three speech
+# services, and the SDL microphone and speaker that feed them. Both are
+# deliberately out of kai_ui and out of kai_test — `make test` has to pass
+# with no oMLX server and no audio device anywhere near it.
+# OpenSSL reaches the two programs that talk to the server and nothing else.
+# It may be on the other side of the internet — omlx.ai-at-home.de answers 308
+# on port 80 — so speech.c needs TLS under its hand-written request. kai_test
+# links neither, so the headless gate still needs nothing but a compiler.
+add_executable(kai_sim host/main.c host/voice.c host/speech.c)
 target_link_libraries(kai_sim PRIVATE kai_ui kai_turn PkgConfig::SDL2 PkgConfig::OPENSSL)
+
+# Times a turn against whichever server is configured. `make bench`. It is the
+# fourth host and links the same speech.c and the same kai_turn kai_sim does,
+# which is the whole point: a benchmark with an HTTP client of its own would
+# measure something the watch never does. No LVGL — it draws nothing.
+add_executable(kai_bench host/bench.c host/speech.c)
+target_link_libraries(kai_bench PRIVATE kai_turn PkgConfig::SDL2 PkgConfig::OPENSSL)
 
 # Renders the UI into a byte array and checks what came out. `make test`.
 add_executable(kai_test host/test_ui.c)

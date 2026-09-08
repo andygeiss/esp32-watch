@@ -102,9 +102,11 @@ in the same bag and say nothing.
   `voice.h` beside them is the five-function contract the two platform halves
   both implement. Both builds compile `turn.c` unchanged.
 - **`host/` — host only.** `main.c` for the SDL window, input devices, tick
-  source and service loop; `voice.c` for the SDL microphone, the socket and
-  the SDL speaker; `test_ui.c` for the headless renderer, and `demo.c` for the
-  one that draws the README's animation.
+  source and service loop; `speech.c` for the three speech services — the
+  environment, the socket, the TLS and the reference clip; `voice.c` for the
+  SDL microphone, the SDL speaker and the thread that takes turns;
+  `test_ui.c` for the headless renderer, `demo.c` for the one that draws the
+  README's animation, and `bench.c` for the one that times a turn.
 - **`firmware/main/` — device only.** The same jobs against the panel and the
   board's own codecs, plus the clock the board cannot read for itself, split
   over `main.c`, `board.c`, `net.c` and `voice.c`. It replaces `host/main.c`
@@ -194,9 +196,11 @@ the baseline's rule 6 that is never waived. Underneath it is only:
     cmake --build build -j
     ./build/kai_sim
 
-`make run` is that last line with `.env` sourced in front of it. `check`, `ci`
-and `test` deliberately do not source it: a gate that reads one machine's file
-is a gate that passes on one machine.
+`make run` is that last line with `.env` sourced in front of it. `make bench`
+sources it too and times a turn against whatever it points at — see the
+benchmark below. `check`, `ci` and `test` deliberately do not source it: a
+gate that reads one machine's file is a gate that passes on one machine, and
+the benchmark needs a server and a network on top of that.
 
 Close the window to exit — `LV_SDL_DIRECT_EXIT` is 1. `compile_commands.json`
 lands in `build/` for clangd.
@@ -235,11 +239,15 @@ Each of these was a real failure or a real warning, not a preference:
 - SDL2 is found with `pkg_check_modules(... IMPORTED_TARGET sdl2)` rather than
   `find_package(SDL2)`; pkg-config follows the Homebrew arm64 prefix with no
   hand-written hint paths.
-- The portable half is its own target, `kai_ui`. Three hosts link it —
-  `kai_sim` with its SDL window, `kai_test` with a byte array it asserts about,
-  `kai_demo` with one it hands to a GIF writer — which is the host/device
-  boundary above, put where the build can hold it up. `kai_demo` builds with
-  the rest rather than on demand, so a UI change cannot leave it behind.
+- The portable half is its own target, `kai_ui`. Three of the four hosts link
+  it — `kai_sim` with its SDL window, `kai_test` with a byte array it asserts
+  about, `kai_demo` with one it hands to a GIF writer — which is the
+  host/device boundary above, put where the build can hold it up. `kai_demo`
+  builds with the rest rather than on demand, so a UI change cannot leave it
+  behind. `kai_bench` is the fourth and links no LVGL at all, because it draws
+  nothing; what it does link is the same `host/speech.c` and the same
+  `kai_turn` `kai_sim` does, which is the whole of why its numbers mean
+  anything.
 - `CONFIG_LV_BUILD_EXAMPLES`, `CONFIG_LV_BUILD_DEMOS` and
   `CONFIG_LV_USE_THORVG_INTERNAL` are `FORCE`d **cache** entries. LVGL declares
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
@@ -571,18 +579,28 @@ sits there, and the centred stack clears them by more than 80 px.
 
 ## The voice loop
 
-One loop, three files:
+One loop, four files:
 
 | | |
 |---|---|
 | `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, the tools and all three request bodies. Compiled into both builds unchanged |
-| `host/voice.c` | the SDL microphone, a hand-written request over a socket or OpenSSL, the SDL speaker, an `SDL_Thread` |
+| `host/speech.c` | where the server is, a hand-written request over a socket or OpenSSL, the reference clip, and `transcribe`/`reply`/`synthesise` |
+| `host/voice.c` | the SDL microphone, the SDL speaker, the gate and an `SDL_Thread` |
 | `firmware/main/voice.c` | the ES7210, `esp_http_client`, the ES8311, a FreeRTOS task |
 
 The two platform halves are deliberately the same shape: the same five
 functions out of `voice/voice.h`, the same record/transcribe/answer/play pass
 in the same order, the same three booleans published to the loop that draws.
 Read one and you have read the other.
+
+**The host is two files where the device is one, and that is a real crack in
+the mirror.** `host/speech.c` came out of `host/voice.c` when the benchmark
+went in: `bench.c` has to ask the three services the same three questions over
+the same transport or it measures nothing, and the alternative was a second
+HTTP client. The loop in each half is still the same pass in the same order —
+what moved is the transport out from under it. The device would split the same
+way the day it wants a benchmark of its own, and until then this is the one
+place the two halves are not line for line.
 
 **Almost nothing in a turn is a device**, which is what `voice/turn.c` is for.
 It went in when the firmware grew a voice, because the alternative was two
@@ -1010,18 +1028,62 @@ its first line and the linker drops the rest. A build that only proves the
 default configuration is not proof the voice path compiles. Set a URL in
 `sdkconfig` before believing a green firmware build.
 
-Measured on this machine, against the oMLX server at `127.0.0.1:8000`:
-transcription answers in about **0.9 s** for 3 s of speech, and synthesis
-takes **2.6-3.3 s** to produce 3 s of it — roughly real time, which is the
-number the chunker exists to hide once there is a model writing the reply.
-Through `https://omlx.ai-at-home.de`, which is that same machine reached the
-long way round, a whole turn measured **0.4 s** to transcribe, **6-11 s** to
-think with `Qwen3.8-27B-oQ4e-mtp` and **2-23 s** to speak, depending on how
-long the answer was. The brain is the expensive part, and it is what the
-untranslated chunker exists to hide. A question that reaches for a tool pays
-for the brain twice — **6 s** to ask for the clock and **5 s** to say the
-answer, measured on the same server — which is the price of the watch not
-making the time up, and the clearest argument for the chunker there is.
+### The benchmark
+
+`make bench` times one turn against whichever server `.env` points at and
+prints where its seconds went. `make bench RUNS=5` runs it five times; three
+is the default, which is enough for a median and about half a minute.
+
+    make bench
+
+It is `host/bench.c`, the fourth host, and the reason it is a C program rather
+than a script is the reason `voice/turn.c` exists: it asks the same three
+services the same three questions, with the bodies built by `turn.c` and put
+on the wire by `host/speech.c`. A benchmark with an HTTP client of its own
+would measure something the watch never does, and would drift from the loop it
+claims to describe exactly the way a second copy of the wake phrase would.
+
+There is no microphone in it and no speaker. What it transcribes is
+`voices/female.wav`, which is already there for the synthesiser to clone and
+is a known five seconds of German — so the transcript has a right answer, and
+the run prints it to be checked. The reply is played nowhere; only its length
+is measured. A turn here is a wake-less turn — transcribe, think, speak — and
+it leaves out the waiting, which is the one part of a real turn that is not
+the server's fault.
+
+Against `https://omlx.ai-at-home.de` with `Qwen3.8-27B-oQ4e-mtp`, three runs:
+
+    run          stt        brain          tts        turn
+    ----------------------------------------------------------
+      1        558 ms      5376 ms      3442 ms      9376 ms
+      2        251 ms      5592 ms      3597 ms      9440 ms
+      3        232 ms      5593 ms      3688 ms      9514 ms
+    ----------------------------------------------------------
+    med        251 ms      5592 ms      3597 ms      9440 ms
+
+    spoke   5.3 s of audio in 3.6 s, 0.68x real time
+
+Three things that table says, and the third is the useful one:
+
+- **Transcription is not the problem.** A quarter of a second for five seconds
+  of speech, and the first run's 558 ms is the TLS handshake being paid once.
+- **The brain is 59% of the turn**, which is where to look first and the
+  reason the model name is configuration. It is also what a tool call doubles:
+  a question that reaches for the clock makes two of these requests, so
+  *Wie spät ist es?* costs about five seconds more than *Wer bist du?*.
+- **Synthesis runs at 0.68x real time**, and that is the argument for the
+  chunker written as a number. The server produces speech faster than the
+  speech takes to say, so a reply cut at its first sentence seam could start
+  playing while the rest is still being made — turning the 3.6 s of TTS into
+  roughly the length of the first sentence. `internal/domain/speech.go` in the
+  Go orchestrator is that chunker and is still not translated. Against a
+  factor above 1.0 it would buy nothing; at 0.68 it buys most of the wait.
+
+The numbers move with the model, the network and the length of the reference
+clip, which is why this is a command rather than a paragraph. Older readings
+from the same machine, for scale: an oMLX at `127.0.0.1:8000` transcribed 3 s
+of speech in **0.9 s** and synthesised it in **2.6-3.3 s**, and the brain has
+been seen anywhere from **6 s to 11 s** depending on the answer's length.
 
 None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
