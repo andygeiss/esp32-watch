@@ -87,9 +87,9 @@ the point of the echo is to hear what the microphone and the transcriber
 actually produced. _Avoid: utterance, query, prompt._
 
 **Brain** — the chat model that answers, and the seam it sits behind.
-`reply()` is that seam on both builds: `Jundot/gemma-4-E2B-it-oQ4e-mtp` by
-default, any model `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` names,
-and the heard text said back when either says **echo**. Not "the LLM" and not "the AI" — the
+`reply()` is that seam on both builds: `Qwen3.8-27B-oQ4e-mtp` by default, any
+model `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` names, and the heard
+text said back when either says **echo**. Not "the LLM" and not "the AI" — the
 watch has three services and this is the one that thinks. Thinking is all it
 does: it knows nothing about this wrist, and what it needs from there it asks
 for with a [[Tool]]. _Avoid: LLM, model (unqualified), AI, assistant._

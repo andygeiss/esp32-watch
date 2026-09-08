@@ -621,10 +621,8 @@ is the same loop in Go:
 | `internal/app`'s turn state | a thread and three atomics, once per platform |
 
 **The answer comes from a chat model, or is the question said back.** The
-model is the default — `Jundot/gemma-4-E2B-it-oQ4e-mtp`, in `turn.h` beside
-the other three — so a watch with a server configured thinks rather than
-echoes. It is the small model, chosen for the second and a half it takes off a
-turn and at a cost the benchmark below states plainly. The
+model is the default — `Qwen3.8-27B-oQ4e-mtp`, in `turn.h` beside the other
+three — so a watch with a server configured thinks rather than echoes. The
 word `echo` in `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` turns it off
 again; it is a word rather than an empty string because empty already means
 "the default", and `turn.c` is where that word is understood, once, on the way
@@ -858,7 +856,7 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_VOICE_URL` | `CONFIG_WATCH_VOICE_URL` | `http://127.0.0.1:8000` on the host; on the device, no assistant at all |
 | `WATCH_VOICE_KEY` | `CONFIG_WATCH_VOICE_KEY` | no `Authorization` header is sent |
 | `WATCH_STT_MODEL` | `CONFIG_WATCH_STT_MODEL` | `parakeet-tdt-0.6b-v3` |
-| `WATCH_BRAIN_MODEL` | `CONFIG_WATCH_BRAIN_MODEL` | `Jundot/gemma-4-E2B-it-oQ4e-mtp`; the word `echo` means no chat request at all |
+| `WATCH_BRAIN_MODEL` | `CONFIG_WATCH_BRAIN_MODEL` | `Qwen3.8-27B-oQ4e-mtp`; the word `echo` means no chat request at all |
 | `WATCH_TTS_MODEL` | `CONFIG_WATCH_TTS_MODEL` | `chatterbox-multilingual-v3` |
 | `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
 | `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
@@ -1118,77 +1116,84 @@ against **9.7 s** with it. That is the size of the prize — a faster brain can
 take about five and a half seconds out of a turn and no more, because the
 other four are the two audio services.
 
-**A faster brain was the obvious next move, and the small one that arrived is
-the default now** — `Jundot/gemma-4-E2B-it-oQ4e-mtp`, measured against the
-`Jundot/Qwen3.8-27B-oQ4e-mtp` the watch was built on. Fifteen runs of
-`make bench` in five blocks of three, interleaved across one evening, same
-clip:
+**A faster brain is the obvious next move, and on 8 September 2026 two were
+tried and neither stuck.** The 27B is still the default, and what follows is
+why — so that the next candidate is measured against something rather than
+tried from scratch.
+
+`Jundot/gemma-4-E2B-it-oQ4e-mtp` first. Fifteen `make bench` runs in five
+blocks of three, interleaved across an evening:
 
     brain                  stt        brain          tts        turn
     -------------------------------------------------------------------
     Jundot/Qwen3.8-27B    708 ms      2794 ms      8216 ms     11620 ms
     Jundot/gemma-4-E2B    748 ms      1301 ms     11264 ms     12921 ms
 
-**Only one of those four columns is worth reading, and the first column is
+**Only one of those four columns was worth reading, and the first column is
 what says so.** Transcription is the same service asking the same question of
 the same five seconds of WAV in both rows, and it still ranged from 240 ms to
 1878 ms across the evening — nearly eightfold, on a server somebody else is
 also using. `tts` ranged 4.1 s to 15.9 s and `turn` 5.3 s to 20.5 s, and the
-two rows' ranges lie almost entirely on top of each other. Those three columns
-are weather.
+two rows' ranges lay almost entirely on top of each other. Those three columns
+were weather. The brain column was not: the ranges barely touched, 2175-3901
+against 679-1855, and six clock questions each through the real request agreed
+at 2948 ms and 1483 ms. **The small model thought in under half the time,
+about 1.5 s off a turn.**
 
-**The brain column is not.** 2794 ms against 1301 ms, and the ranges barely
-touch — 2175-3901 against 679-1855, over six readings and nine. Six clock
-questions each through the request the binary builds, taken in one minute, put
-it at 2948 ms and 1483 ms. **The brain more than halves, and that is the whole
-of the win: about 1.5 s off a turn.**
+**It could not say a time in German, which is the whole of why it is not the
+default.** Six askings of *Wie spät ist es?* at 20:36 came back *zwanzig Uhr
+dreißig sechs* — thirty and six read off as two numbers, where German says
+*sechsunddreißig* — with the year as words that are not words
+(*zweitausendundzwanzigsechs*), and twice with the hour two hours out. Nought
+for six, against six for six on the 27B in the same minute. Nothing in
+`turn.c` can repair that: the prompt already asks for words rather than
+digits, and no post-processing turns *dreißig sechs* back into a time.
 
-**What eats into it is that a small model writes more.** Asked the clip's
-*Guten Morgen*, gemma answered with 79 characters once and with 124 and 146
-the other times, where the 27B answered with 83 and 112. At the measured 37 ms
-a character, the gap between 79 and 146 is 2.5 s of synthesis against 1.5 s of
-saved thinking. The long ones are long because it recites the clock sentence
-unprompted at a greeting: a model asked for one or two short sentences that
-writes three is paid for twice, once to make each and once to say it.
+`Jundot/Qwen3.6-35B-A3B-oQ4e-mtp` next, an hour later — the mixture-of-experts
+shape this section had been waiting for, with about 3B parameters active. It
+is **the fastest brain measured here**: 1128, 948 and 1177 ms across three
+benchmark blocks, against the 27B's 2794 ms, on an evening whose `stt` column
+read 215-697 ms and so was genuinely quiet rather than flattering. A whole
+turn came in at **5.5-6.9 s**.
 
-**And it cannot say a time in German.** Six askings of *Wie spät ist es?* at
-20:36, through that same real request:
+**It is better at the clock than gemma and worse than the 27B: seven right out
+of twelve**, two readings at each of six times of day, through the request the
+binary builds with `time()` faked. The failures are all one failure — it
+converts to a *"X Minuten vor Y"* form and then gets the arithmetic wrong:
+*achtundfünfzig Minuten vor neun* for 20:57, *achtundzwanzig Minuten vor elf*
+for 23:08, and once *vierzehn Uhr* for 13:44, which is the 27B's own
+documented slip. Asked plainly it is fine — *Es ist fünfzehn Uhr zwölf*, twice
+for two. It also answered a German question in English once, recited the clock
+unprompted at a greeting, and argued with the transcript.
 
-    1217 ms  Es ist zwanzig Uhr dreißig nach acht in der Nacht …
-    1937 ms  Es ist zwanzig Uhr dreißig sechs in der Nacht. …
-    1852 ms  … zwanzig Uhr dreißig sechs Minuten … zweitausenddreiund-
-                 zwanzigsechs.
-     868 ms  … zwanzig Uhr dreißig sechs … zweitausendundzwanzigsechs.
+**What settled it was neither latency nor the clock.** Over one session this
+server's roster changed three times: gemma answered, then 404ed with *Model
+not found*; the A3B answered for about twenty minutes and then 404ed the same
+way, mid-benchmark; and while the A3B was resident the 27B could not be loaded
+at all — `507`, *projected memory 42.84GB would exceed the metal_cap memory
+ceiling 37.44GB*. The 27B is the one model that has been there every time it
+was asked for.
 
-Nought for six, and the same in every benchmark reply that mentioned a time:
-*Es ist zweiundzwanzig Uhr vierundeinhalb nach dem Abendtag* at 20:40. The
-hour is often right and the minutes never are — *dreißig sechs* is thirty and
-six read off as two numbers where German says *sechsunddreißig* — and the year
-comes out as words that are not words: *zweitausendundzwanzigsechs*,
-*zweitausenddreiundzwanzigsechs*. Twice it also put the hour two hours out.
-The 27B was six for six on that question in the same minute — *Es ist zwanzig
-Uhr und sechsunddreißig Minuten* — leaking digits into the date once.
+**That is a fact about the default rather than about the models.** The default
+is compiled into the firmware and is what an unconfigured watch uses, and a
+default naming a model the server does not have is a `404` on every turn —
+silence, by the rule two sections up, because a brain that is configured and
+fails is not allowed to echo. A brain still on trial belongs in
+`WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL`, where changing it costs one
+line and breaks nothing else; the default should name the model most likely to
+answer.
 
-This is exactly the check the tools paragraph below asks any replacement to
-pass, and it is failed: **a brain that answers in a second by mis-saying the
-hour has made the watch worse, not faster**, and the hour is the question this
-thing exists to answer. Nothing in `turn.c` can repair it either — the prompt
-already asks for words rather than digits, and no post-processing turns
-*dreißig sechs* back into a time. The default is gemma because it was asked
-for and because the 1.5 s is real and worth having written down. One line
-reverses it — `WATCH_BRAIN_MODEL="Jundot/Qwen3.8-27B-oQ4e-mtp"` in `.env`, or
-`CONFIG_WATCH_BRAIN_MODEL` on the device — and `make bench
-BRAIN=Jundot/Qwen3.8-27B-oQ4e-mtp` re-measures the pair without touching
-either.
+So the shopping list for the next one, in the order it has to pass: **be on
+the server reliably; say the hour right; then be fast.** The A3B has the third
+and half the second, and `make bench BRAIN=Jundot/Qwen3.6-35B-A3B-oQ4e-mtp` is
+what re-checks the first two whenever it reappears. Two ways to run the
+measurement, both learned the hard way: **interleave the blocks**, because a
+server this noisy otherwise hands whichever model ran second a whole different
+evening, and **read `stt` first**, because it is the column that cannot move
+for any reason but load and is therefore the error bar on the other three.
 
-Two lessons for the next brain that is tried, both cheap to reuse: **alternate
-the blocks**, because a server this noisy will otherwise hand whichever model
-ran second a whole different evening; and **read `stt` first**, because it is
-the column that cannot move for any reason but load, and it is therefore the
-error bar on the other three.
-
-The mixture-of-experts model this section used to point at,
-`Qwen3.8-Flash-Next-4bit-paged`, still does not load — `Missing 560
+The older mixture-of-experts model this section used to point at,
+`Qwen3.8-Flash-Next-4bit-paged`, never loaded at all — `Missing 560
 parameters`, and after the failed load the server dropped it from `/v1/models`
 altogether. Worth retrying whenever the model list changes: `make bench
 BRAIN=` is one command precisely so that retry costs nothing.

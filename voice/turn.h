@@ -39,18 +39,10 @@
  * out of the speaker is exactly what the transcriber heard. It is a word
  * rather than an empty string because empty already means "the default", and
  * the default is a model now. `BRAIN=echo` is what the Go orchestrator calls
- * the same mode.
- *
- * The brain default is the small model, and that is a trade rather than a
- * free win. Measured over fifteen benchmark runs it thinks in 1.3 s where
- * Jundot/Qwen3.8-27B-oQ4e-mtp takes 2.8 s — but asked the hour it says
- * "zwanzig Uhr dreissig sechs" rather than "sechsunddreissig", nought times
- * out of six, where the 27B was six for six. Name the 27B here or in
- * WATCH_BRAIN_MODEL when the answer matters more than the second and a half;
- * the numbers and the readings are in CLAUDE.md under The benchmark. */
+ * the same mode. */
 #define VOICE_STT_MODEL   "parakeet-tdt-0.6b-v3"
 #define VOICE_TTS_MODEL   "chatterbox-multilingual-v3"
-#define VOICE_BRAIN_MODEL "Jundot/gemma-4-E2B-it-oQ4e-mtp"
+#define VOICE_BRAIN_MODEL "Qwen3.8-27B-oQ4e-mtp"
 #define VOICE_BRAIN_ECHO  "echo"
 #define VOICE_LANGUAGE    "de"
 

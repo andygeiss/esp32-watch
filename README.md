@@ -36,10 +36,10 @@ and the words they listen for are one list in `voice/turn.c`, compiled into
 both. `Hey Kai` is the default; each side can be pointed at another name
 without touching that file.
 
-The answer comes from a chat model — `Jundot/gemma-4-E2B-it-oQ4e-mtp` unless
-told otherwise — or is the question said back, which is what `echo` asks for.
-Where the server is, the key it wants, which three models answer and what
-language to speak in are settings on both builds: `.env` on the host, menuconfig on the
+The answer comes from a chat model — `Qwen3.8-27B-oQ4e-mtp` unless told
+otherwise — or is the question said back, which is what `echo` asks for. Where
+the server is, the key it wants, which three models answer and what language
+to speak in are settings on both builds: `.env` on the host, menuconfig on the
 device, and the same `voice/turn.c` turns them into the same requests either
 way.
 
@@ -145,9 +145,10 @@ variable holding `hey`. The start-up log says what the watch actually took.
 
 `WATCH_STT_MODEL`, `WATCH_BRAIN_MODEL`, `WATCH_TTS_MODEL`, `WATCH_LANGUAGE`
 and `WATCH_WAKE_PHRASE` are the rest of the list, and empty means the default
-written down in `voice/turn.h` — `Jundot/gemma-4-E2B-it-oQ4e-mtp` for the
-brain, so the watch thinks unless `WATCH_BRAIN_MODEL=echo` tells it to say the
-question back instead. `make` on its own is `make check`: the `lv_conf.h` liveness grep, the build, the boundary
+written down in `voice/turn.h` — `Qwen3.8-27B-oQ4e-mtp` for the brain, so the
+watch thinks unless `WATCH_BRAIN_MODEL=echo` tells it to say the question back
+instead. `make` on its
+own is `make check`: the `lv_conf.h` liveness grep, the build, the boundary
 check, and 108 assertions rendered into a byte array by `test_ui.c` —
 geometry, opacity, label text and the pixels themselves, with no window and no
 screenshot. `make ci` runs the lot against the commit.
