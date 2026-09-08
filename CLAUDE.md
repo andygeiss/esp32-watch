@@ -691,6 +691,27 @@ not assumed, and all four are load-bearing:
   back as plain words with no `tool_calls` at all, which is what says the
   tools cost nothing on the turns that do not use them.
 
+**The speaker cannot say digits, and the tools are what made that matter
+every time.** `Es ist 13:44 Uhr.` is the correct sentence, and it is not what
+comes out of the watch: spoken through `chatterbox-multilingual-v3` and
+transcribed straight back it reads `Es ist 13,4 Uhr.` — the right time, said
+wrong, which is worse than no answer because it sounds like one. Told to write
+words instead, the same model returns `Es ist dreizehn Uhr vierundvierzig.`,
+and *that* transcribes back as 13:44. So `VOICE_SYSTEM_FMT` carries a line
+forbidding digits, and it sits there rather than in the tools for a plain
+reason: every language spells its own numbers, the brain already knows which
+one it is answering in, and `turn.c` would need a speller per language to do
+the same job worse. The tools still hand over `13:44`, which is unambiguous
+and language-neutral; turning it into speech is the brain's half.
+
+This was never only about the clock — any answer with a number in it went out
+mangled, and had done since the brain went in. What the tools changed is that
+the commonest question anyone asks a watch now guarantees a number in the
+answer, so a bug that used to be occasional became the first thing you hear.
+Speaking a candidate sentence and transcribing it back is how it was found and
+is the way to check the next one; it is the same round trip that showed
+`Hey Lissi` arriving as `Halusy`.
+
 `VOICE_TOOL_ROUNDS` caps a model that will not stop asking: three replies is
 two rounds of tools and then an answer, one more than anything here needs.
 Past it the last reply is spoken if it had anything to say and the turn is

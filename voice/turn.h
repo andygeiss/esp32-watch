@@ -329,15 +329,34 @@ const voice_models_t * voice_models_get(void);
  * speaker on someone's wrist, where a paragraph is a minute of talking and a
  * bulleted list is not a thing that can be said at all.
  *
+ * The line about digits is the one that was paid for. Chatterbox cannot read
+ * a number: given "Es ist 13:44 Uhr." it says something that transcribes back
+ * as "Es ist 13,4 Uhr." — the right time, said wrong, which is worse than no
+ * answer because it sounds like one. Told to write words instead, the same
+ * model returns "Es ist dreizehn Uhr vierundvierzig.", and that transcribes
+ * back as 13:44. So the digits are spelled out here rather than in the tools:
+ * every language spells its own numbers and the brain already knows which one
+ * it is answering in, where turn.c would need a speller per language to do
+ * the same job worse. It is not only the clock either — any answer with a
+ * number in it went out mangled, and the tools are simply what made that
+ * happen every single time.
+ *
  * The name in it is the one part that is configuration, because it is the
- * answer to "who are you?" and that is a thing an owner gets to decide. */
+ * answer to "who are you?" and that is a thing an owner gets to decide.
+ *
+ * BYTES went from 512 to 640 when that line went in: the prompt is 420 bytes
+ * with the longest name that fits, and a snprintf that runs out here does not
+ * fail, it truncates — which would cut a rule off mid-sentence and leave the
+ * brain following most of one. */
 #define VOICE_BRAIN_MAX_TOKENS 256
-#define VOICE_SYSTEM_BYTES     512
+#define VOICE_SYSTEM_BYTES     640
 #define VOICE_SYSTEM_FMT                                                      \
     "You are %s, the voice of a wristwatch. Answer in the language the "      \
     "question was asked in. Keep it to one or two short sentences: every "    \
-    "word is read aloud through a small speaker. No markdown, no lists, no "  \
-    "emoji and no stage directions — only what should be said."
+    "word is read aloud through a small speaker. Write numbers, times and "   \
+    "dates as words and never as digits, because the voice that reads your "  \
+    "answer aloud cannot say digits. No markdown, no lists, no emoji and no " \
+    "stage directions — only what should be said."
 
 /** The whole body of a transcription request: one WAV in a multipart form. */
 bool voice_stt_body(voice_buf_t * body, const int16_t * pcm, size_t samples);
