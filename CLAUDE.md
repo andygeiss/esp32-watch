@@ -96,8 +96,9 @@ in the same bag and say nothing.
   compile these files *unchanged*, from where they sit.
 - **`voice/` — portable, and one notch stricter.** `turn.c` and `turn.h` are
   everything about a turn that is not a device: the words the watch answers
-  to, the gate that ends a turn, the JSON, the base64, the WAV and both
-  request bodies. The C standard library and *nothing else* — not even LVGL.
+  to, the gate that ends a turn, the JSON, the base64, the WAV, both request
+  bodies, and the tools the brain can reach for. The C standard library and
+  *nothing else* — not even LVGL.
   `voice.h` beside them is the five-function contract the two platform halves
   both implement. Both builds compile `turn.c` unchanged.
 - **`host/` — host only.** `main.c` for the SDL window, input devices, tick
@@ -155,9 +156,12 @@ compile each portable directory alone and look at what it leaves undefined:
 
 `make check` runs exactly this, plus `-Wall -Wextra -Werror` on both compiles.
 Today `ui.o` leaves `lv_*` plus `time` and `localtime_r`, and `turn.o` leaves
-twelve libc symbols and not one more — no LVGL, no sockets, no logging. Do
-not grep the sources for the string `SDL` instead — the file comments say the
-word, so it always false-positives.
+fourteen libc symbols and not one more — no LVGL, no sockets, no logging. Two
+of the fourteen are that same `time` and `localtime_r`, and they are there for
+the same reason: the clock tools below read the hour off the clock the face is
+drawn from, so the spoken time and the digits cannot disagree. Do not grep the
+sources for the string `SDL` instead — the file comments say the word, so it
+always false-positives.
 
 The firmware's is the build itself. `firmware/components/kai_ui/` compiles the
 same four files out of `ui/` and `REQUIRES lvgl` and nothing else;
@@ -571,7 +575,7 @@ One loop, three files:
 
 | | |
 |---|---|
-| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, and all three request bodies. Compiled into both builds unchanged |
+| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, the tools and all three request bodies. Compiled into both builds unchanged |
 | `host/voice.c` | the SDL microphone, a hand-written request over a socket or OpenSSL, the SDL speaker, an `SDL_Thread` |
 | `firmware/main/voice.c` | the ES7210, `esp_http_client`, the ES8311, a FreeRTOS task |
 
@@ -616,6 +620,92 @@ not be reached looks like it answered. `internal/domain/speech.go`'s
 chunker is the other half of that job and is deliberately not translated yet:
 it cuts a streaming reply at sentence seams so speech starts before the text
 is finished, and with an echo there is nothing to stream.
+
+### The tools
+
+**A watch that has to ask a server what time it is has failed at the one
+thing it is.** The brain runs in a rack: it does not know the hour on this
+wrist, it does not know which side of the planet the wrist is on, and asked
+anyway it does not say so — it invents an hour, confidently, in a sentence
+that sounds exactly like a right answer. That is the one wrong answer a watch
+cannot afford, and it is why the first two tools are the clock:
+
+| | |
+|---|---|
+| `get_time` | `13:03` — the local hour and minute, 24-hour |
+| `get_date` | `2026-09-08 (Tuesday)` — ISO, with the weekday spelled out |
+
+Both read `time()` and `localtime_r()`, which is the *same clock `ui.c` draws
+the face from*. That is the whole point of them being in `voice/turn.c`: one
+clock read twice, so what the watch says and what it shows cannot disagree.
+It is also the two symbols `turn.o` grew by, and on the device it means the
+spoken time is SNTP's if there is WiFi and the boot counter's if there is
+not — the same thing the digits are, honestly wrong in the same way rather
+than wrong in a second way of its own.
+
+The weekday is spelled out rather than left to be worked out from the date,
+because that arithmetic is exactly what models get wrong, and `tm_wday` is
+already sitting in the struct. It is written in English because that is the
+language of a machine-readable date; the system prompt's *answer in the
+language the question was asked in* is what turns it back into `Dienstag`.
+
+**A tool is a name, a sentence, and a function**, and the sentence is doing
+most of the work. `TOOLS[]` in `turn.c` is the whole declaration, and each
+description ends by telling the model it has no other way to know — without
+that clause a model will happily answer from the air. Nothing in a tool is a
+device, so all of it is on the portable side and both builds get the same
+ones. What the watch knows and a server cannot is the whole of what belongs
+here: the clock now, the charge and the radio when there is a gauge to read
+them off.
+
+**One question is now more than one request**, which is the real change. The
+brain asks, the watch answers, and *the whole conversation goes back with both
+in it* — a tool result is only an answer to a call the conversation can still
+see, and a server handed one without the other rejects it. So `voice_chat_t`
+accumulates the messages instead of `voice_brain_body()` rebuilding them out
+of `heard` each time, and `reply()` on both platforms is a short loop around
+the same three lines it always was. Everything in it is portable except the
+POST, which is the same split the rest of this file makes.
+
+Four things about it were measured against oMLX and `Qwen3.8-27B-oQ4e-mtp`,
+not assumed, and all four are load-bearing:
+
+- **The server honours `tools` alongside `enable_thinking:false`.** Those are
+  the two settings most likely to fight, since tool selection is the kind of
+  thing a reasoning model does in its scratchpad. They do not: asked *Wie spät
+  ist es?* the model came back `finish_reason: "tool_calls"` with a clean call
+  to `get_time`, and no `Thinking:` preamble anywhere.
+- **A reply can carry a tool call *and* a sentence.** Asked *Welcher Tag ist
+  heute?*, the model called `get_date` and wrote `Ich muss das Datum erst von
+  der Uhr ablesen.` beside it. So `voice_chat_tools()` looks at the calls
+  before the words, and that order is the load-bearing part: read the words
+  first and the watch says the model clearing its throat and then stops,
+  never having asked the clock, on the one question it was given a clock for.
+- **Two calls arrive in one message.** *Welcher Wochentag ist heute und wie
+  spät ist es?* returned `get_time` and `get_date` together. `VOICE_TOOL_MAX`
+  is 4 rather than 1 because of that measurement and not in case of it — a
+  call left without a result of its own is a rejected conversation, so
+  handling only the first would break precisely the question that wants both
+  tools.
+- **A question that needs neither still gets neither.** *Wer bist du?* came
+  back as plain words with no `tool_calls` at all, which is what says the
+  tools cost nothing on the turns that do not use them.
+
+`VOICE_TOOL_ROUNDS` caps a model that will not stop asking: three replies is
+two rounds of tools and then an answer, one more than anything here needs.
+Past it the last reply is spoken if it had anything to say and the turn is
+silent if it did not — the same silence any other broken turn makes.
+
+**The scanner is still a scanner.** Reading a tool call out of a reply is the
+one place it nearly was not enough: every call carries `"type":"function"`
+beside the `"function"` key, so a plain `strstr` for the key lands on the
+value. `json_key()` is that fix — it requires the colon — and `json_string()`
+goes through it now too, which it always should have. Within a call, `"id"`
+and `"function"` are siblings in either order, so both are looked for from the
+same place and the name is taken from inside the function object whichever way
+round they came. The one shape this cannot read is a tool argument that is
+itself a JSON document with an `"id"` in it; no tool here takes arguments at
+all, and the day one does, it wants a parser rather than another special case.
 
 **The transcriber is the wake-word engine.** There is no button and no
 wake-word model, so the microphone is open from start-up, every utterance in
@@ -802,7 +892,7 @@ measured, not assumed. Against oMLX with `Qwen3.8-27B-oQ4e-mtp` the top-level
 back with the reply starting `Thinking: 1. Analyze the Request …`, every word
 of which the watch reads aloud before reaching the answer. The same three with
 `"chat_template_kwargs":{"enable_thinking":false}` came back `Es ist ungefähr
-zehn Uhr morgens.` `voice_brain_body()` sends both, because other servers read
+zehn Uhr morgens.` `voice_chat_body()` sends both, because other servers read
 the top-level one and no server here objects to seeing it twice. The Go
 orchestrator's `internal/openai` sends only the top-level field, and against
 this server it has the same problem.
@@ -907,7 +997,10 @@ Through `https://omlx.ai-at-home.de`, which is that same machine reached the
 long way round, a whole turn measured **0.4 s** to transcribe, **6-11 s** to
 think with `Qwen3.8-27B-oQ4e-mtp` and **2-23 s** to speak, depending on how
 long the answer was. The brain is the expensive part, and it is what the
-untranslated chunker exists to hide.
+untranslated chunker exists to hide. A question that reaches for a tool pays
+for the brain twice — **6 s** to ask for the clock and **5 s** to say the
+answer, measured on the same server — which is the price of the watch not
+making the time up, and the clearest argument for the chunker there is.
 
 None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at

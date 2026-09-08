@@ -354,9 +354,82 @@ bool voice_tts_body(voice_buf_t * body, const char * text,
 /** The transcript out of a transcription reply. */
 bool voice_stt_text(const char * json, char * out, size_t cap);
 
+/* ------------------------------------------------------------------ */
+/* Tools: the questions the watch can answer and the brain cannot.            */
+/* ------------------------------------------------------------------ */
+
+/* The brain runs on a server in a rack. It does not know what time it is on
+ * this wrist, it does not know which side of the planet the wrist is on, and
+ * asked anyway it answers with an hour it made up rather than saying so —
+ * which on a watch is the one wrong answer that matters. So the clock is
+ * handed over as a tool: the brain asks, this file reads the same time() the
+ * face is drawn from, and the brain says it back in the language the question
+ * came in.
+ *
+ * These are the first two and the mechanism is the point. A tool is a name, a
+ * sentence telling the brain when to reach for it, and a function that fills
+ * in a short string — none of which is a device, so all of it is on this side
+ * of the boundary and both builds get the same tools. What the watch knows
+ * that a server cannot is the whole of what belongs here: the clock now, the
+ * charge and the radio when there is a gauge to read them off. */
+
+/* How many calls one reply may carry, and how many replies a turn asks for
+ * before it insists on words.
+ *
+ * MAX is not 1, and that was measured rather than allowed for: asked "Welcher
+ * Wochentag ist heute und wie spät ist es?", Qwen3.8-27B calls get_time and
+ * get_date in the same message. A call left without a result of its own is a
+ * conversation the server rejects, so handling only the first would break
+ * exactly the question that most wants both tools.
+ *
+ * ROUNDS is what stops a model that has decided to keep asking. Three replies
+ * is two rounds of tools and then an answer, which is one more round than
+ * anything here needs. */
+#define VOICE_TOOL_MAX    4
+#define VOICE_TOOL_ROUNDS 3
+
+/* One tool's answer, and one call's id, name and arguments as they come back
+ * to be echoed. A date with its weekday is the longest answer there is; ids
+ * are 29 characters from OpenAI and 46 from some of the model servers. */
+#define VOICE_TOOL_BYTES      64
+#define VOICE_TOOL_ID_BYTES   64
+#define VOICE_TOOL_NAME_BYTES 32
+#define VOICE_TOOL_ARGS_BYTES 96
+
+/** Room for one round's worth of `get_time -> 09:41`, for the platform log. */
+#define VOICE_TOOL_LOG_BYTES 160
+
 /**
- * The whole body of a chat completion request: the system prompt above, then
- * what was heard, and the model named by voice_models_set().
+ * What this watch can be asked to look up, as `get_time, get_date`, for the
+ * start-up log. It is written out here rather than handed over a name at a
+ * time because otherwise both platform halves would keep the same little loop
+ * and the same clamp — the same reason the wake phrases are only ever counted
+ * from this side. Returns `out`.
+ */
+const char * voice_tool_list(char * out, size_t cap);
+
+/**
+ * One exchange with the brain — which is more than one request as soon as
+ * there are tools. The brain asks for the clock, the clock answers, and the
+ * whole conversation goes back with both in it, because a tool result is only
+ * an answer to a call the conversation can still see. So the messages
+ * accumulate here rather than being rebuilt out of `heard` each time.
+ *
+ * Zero it, hand it to voice_chat_start(), and give it back to
+ * voice_chat_free(); the buffer comes from whichever allocator
+ * voice_buf_alloc() was given, so on the device it is PSRAM like the rest.
+ */
+typedef struct {
+    voice_buf_t messages;
+    unsigned    rounds;
+} voice_chat_t;
+
+/** Open a conversation: the system prompt, then what was heard. */
+bool voice_chat_start(voice_chat_t * chat, const char * heard);
+
+/**
+ * The whole body of the next chat completion request: the model named by
+ * voice_models_set(), the tools above, and the conversation so far.
  *
  * Thinking is turned off in it and that is load-bearing, not a tuning knob. A
  * reasoning model left to think writes its scratchpad into the reply —
@@ -369,7 +442,33 @@ bool voice_stt_text(const char * json, char * out, size_t cap);
  * is nothing here that could start speaking early; a stream would only be a
  * second parser for the same text.
  */
-bool voice_brain_body(voice_buf_t * body, const char * heard);
+bool voice_chat_body(voice_chat_t * chat, voice_buf_t * body);
+
+/**
+ * Read one reply back. True when the brain asked for tools instead of
+ * answering: the calls have been run, their results are in the conversation,
+ * and the caller POSTs voice_chat_body() again. False when the brain
+ * answered — read it with voice_brain_text() — and false again when the
+ * rounds ran out, which is deliberately the same answer: whatever that last
+ * reply had to say is said, and a reply that was only a call has nothing, so
+ * the turn ends in the same silence any other broken one makes.
+ *
+ * That the calls are looked at before the words is load-bearing, and it was
+ * measured. A reply can carry both: asked "Welcher Tag ist heute?",
+ * Qwen3.8-27B calls get_date and writes "Ich muss das Datum erst von der Uhr
+ * ablesen." beside it. Read the words first and the watch says the model
+ * clearing its throat, then stops — never having asked the clock, on the one
+ * question it was given a clock for.
+ *
+ * `ran` gets one round's `get_time -> 09:41` for the platform to log, which
+ * is the only way to see whether the brain reached for the clock or guessed
+ * at it. NULL asks for none.
+ */
+bool voice_chat_tools(voice_chat_t * chat, const char * json,
+                      char * ran, size_t cap);
+
+/** Give the conversation back. Safe on one that was only ever zeroed. */
+void voice_chat_free(voice_chat_t * chat);
 
 /**
  * The answer out of a chat completion reply. It reads the message's own

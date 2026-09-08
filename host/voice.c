@@ -622,7 +622,9 @@ static void play(const unsigned char * file, size_t len)
  * the question when the model could not be reached looks like it answered. */
 static bool reply(const char * heard, char * out, size_t cap)
 {
+    voice_chat_t chat = { 0 };
     voice_buf_t body = { 0 }, answer = { 0 };
+    char tools[VOICE_TOOL_LOG_BYTES];
     bool ok = false;
 
     if (voice_models_get()->brain[0] == '\0') {
@@ -630,9 +632,22 @@ static bool reply(const char * heard, char * out, size_t cap)
         return true;
     }
 
-    if (!voice_brain_body(&body, heard)) goto done;
-    if (!http_post(VOICE_BRAIN_PATH, VOICE_BRAIN_TYPE, body.data, body.len,
-                   &answer, NULL, 0)) goto done;
+    if (!voice_chat_start(&chat, heard)) goto done;
+
+    /* One question is more than one request as soon as the brain can ask the
+     * watch what time it is. It is voice_chat_tools() that caps the rounds,
+     * so this cannot run away, and the buffers are given back at the top of
+     * each pass rather than the bottom because the last pass's answer is what
+     * gets read out below. */
+    for (;;) {
+        voice_buf_free(&body);
+        voice_buf_free(&answer);
+        if (!voice_chat_body(&chat, &body)) goto done;
+        if (!http_post(VOICE_BRAIN_PATH, VOICE_BRAIN_TYPE, body.data, body.len,
+                       &answer, NULL, 0)) goto done;
+        if (!voice_chat_tools(&chat, answer.data, tools, sizeof tools)) break;
+        SDL_Log("voice: %s", tools);
+    }
 
     ok = voice_brain_text(answer.data, out, cap);
     if (!ok) SDL_Log("voice: no answer in what %s sent back", voice_models_get()->brain);
@@ -640,6 +655,7 @@ static bool reply(const char * heard, char * out, size_t cap)
 done:
     voice_buf_free(&body);
     voice_buf_free(&answer);
+    voice_chat_free(&chat);
     return ok;
 }
 
@@ -935,7 +951,10 @@ void voice_start(void)
     SDL_Log("voice: waiting to be called, hearing through %s and speaking as %s",
             voice_models_get()->stt, voice_models_get()->tts);
     if (voice_models_get()->brain[0] != '\0') {
-        SDL_Log("voice: thinking with %s", voice_models_get()->brain);
+        char tools[VOICE_TOOL_LOG_BYTES];
+
+        SDL_Log("voice: thinking with %s, and it can ask for %s",
+                voice_models_get()->brain, voice_tool_list(tools, sizeof tools));
     }
     else {
         SDL_Log("voice: %s=%s — the answer is the question said back",

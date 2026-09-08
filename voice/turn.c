@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* ------------------------------------------------------------------ */
 /* The buffer.                                                                */
@@ -594,25 +595,45 @@ static bool json_quote(voice_buf_t * buf, const char * s)
     return voice_buf_str(buf, "\"");
 }
 
+static void json_space(const char ** at)
+{
+    while (**at == ' ' || **at == '\t' || **at == '\n' || **at == '\r') (*at)++;
+}
+
+/* Finds key used as a key — quoted, and with a colon after it — and hands
+ * back the value. A plain strstr for the name is not enough once tool calls
+ * are in the reply: every one of them carries "type":"function" beside the
+ * "function" key, and the value is the earlier of the two. */
+static const char * json_key(const char * json, const char * key)
+{
+    char pattern[64];
+    const char * at;
+    size_t n;
+
+    n = (size_t) snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    if (n >= sizeof(pattern)) return NULL;
+
+    for (at = json; (at = strstr(at, pattern)) != NULL; ) {
+        const char * after = at + n;
+        json_space(&after);
+        if (*after == ':') return after + 1;
+        at = after;
+    }
+    return NULL;
+}
+
 /* Copies the string value of key out of json. The server writes UTF-8
  * unescaped — FastAPI renders with ensure_ascii off — but \u is handled
  * anyway, because a server that changes its mind about that should not turn
  * an umlaut into a truncated reply. */
 static bool json_string(const char * json, const char * key, char * out, size_t cap)
 {
-    char pattern[64];
-    const char * at;
+    const char * at = json_key(json, key);
     size_t o = 0;
 
-    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    at = strstr(json, pattern);
     if (at == NULL) return false;
 
-    at += strlen(pattern);
-    while (*at == ' ' || *at == '\t' || *at == '\n' || *at == '\r') at++;
-    if (*at != ':') return false;
-    at++;
-    while (*at == ' ' || *at == '\t' || *at == '\n' || *at == '\r') at++;
+    json_space(&at);
     if (*at != '"') return false; /* null, a number, anything but a string */
     at++;
 
@@ -825,11 +846,200 @@ bool voice_tts_body(voice_buf_t * body, const char * text,
 }
 
 
-/* One question, one answer, no history. A turn is the whole conversation
- * here: the loop keeps nothing between them, so the model is told who it is
- * and what was said and nothing else.
+/* ------------------------------------------------------------------ */
+/* The tools, and the conversation they turn one request into. See turn.h    */
+/* for why a watch hands its own clock to the brain rather than being asked. */
+/* ------------------------------------------------------------------ */
+
+/* The same time() and localtime_r() ui.c draws the face from, which is what
+ * makes the spoken answer and the digits agree: one clock, read twice. On the
+ * device that clock is SNTP's if there is WiFi and the boot counter if there
+ * is not, and neither this file nor the brain can tell the difference — the
+ * watch says what it believes, the same as the face does. */
+static void tool_time(char * out, size_t cap)
+{
+    time_t now = time(NULL);
+    struct tm local;
+
+    localtime_r(&now, &local);
+    snprintf(out, cap, "%02d:%02d", local.tm_hour, local.tm_min);
+}
+
+/* ISO, with the weekday spelled out beside it. The date alone would do, and
+ * the day it falls on is exactly the arithmetic models get wrong; tm_wday is
+ * already sitting there, so handing it over costs a table and removes a class
+ * of confidently wrong answers. English because that is the language of a
+ * machine-readable date — the system prompt is what turns it back into the
+ * one the question was asked in. */
+static void tool_date(char * out, size_t cap)
+{
+    static const char * const WEEKDAYS[] = {
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+    };
+    time_t now = time(NULL);
+    struct tm local;
+
+    localtime_r(&now, &local);
+    snprintf(out, cap, "%04d-%02d-%02d (%s)", local.tm_year + 1900,
+             local.tm_mon + 1, local.tm_mday, WEEKDAYS[local.tm_wday % 7]);
+}
+
+/* The description is not documentation, it is the whole of what makes a model
+ * reach for the tool instead of guessing, so each one ends by saying there is
+ * no other way to know. That last clause is doing more work than the rest of
+ * the sentence. */
+static const struct {
+    const char * name;
+    const char * description;
+    void (*run)(char * out, size_t cap);
+} TOOLS[] = {
+    { "get_time",
+      "The time right now, from the watch's own clock, as HH:MM on a 24-hour "
+      "clock in the wearer's local timezone. Call this whenever you are asked "
+      "what time it is or how long until something; you have no other way to "
+      "know, and a guess would be wrong.",
+      tool_time },
+    { "get_date",
+      "Today's date, from the watch's own clock, as YYYY-MM-DD with the "
+      "weekday in brackets, in the wearer's local timezone. Call this "
+      "whenever you are asked the date, the day of the week, or anything "
+      "counted from today; you have no other way to know, and a guess would "
+      "be wrong.",
+      tool_date },
+};
+
+#define TOOL_N (sizeof TOOLS / sizeof TOOLS[0])
+
+const char * voice_tool_list(char * out, size_t cap)
+{
+    size_t i, at = 0;
+
+    if (cap > 0) out[0] = '\0';
+    for (i = 0; i < TOOL_N && at + 1 < cap; i++) {
+        int wrote = snprintf(out + at, cap - at, "%s%s",
+                             at > 0 ? ", " : "", TOOLS[i].name);
+        if (wrote < 0 || (size_t) wrote >= cap - at) break;
+        at += (size_t) wrote;
+    }
+    return out;
+}
+
+/* Every request in the conversation carries the declarations, not just the
+ * first: the brain is told nothing it is not told again. Neither tool takes
+ * an argument — the watch is the only place either answer could come from, so
+ * there is nothing to ask about — and an empty schema is how JSON Schema says
+ * that. A tool that does take one grows a field in the table above and its
+ * own properties here. */
+static bool tools_declare(voice_buf_t * body)
+{
+    size_t i;
+
+    if (!voice_buf_str(body, ",\"tools\":[")) return false;
+    for (i = 0; i < TOOL_N; i++) {
+        if (i > 0 && !voice_buf_str(body, ",")) return false;
+        if (!voice_buf_str(body, "{\"type\":\"function\",\"function\":{\"name\":") ||
+            !json_quote(body, TOOLS[i].name) ||
+            !voice_buf_str(body, ",\"description\":") ||
+            !json_quote(body, TOOLS[i].description) ||
+            !voice_buf_str(body, ",\"parameters\":{\"type\":\"object\""
+                                 ",\"properties\":{}}}}")) return false;
+    }
+    return voice_buf_str(body, "]");
+}
+
+static void tool_run(const char * name, char * out, size_t cap)
+{
+    size_t i;
+
+    for (i = 0; i < TOOL_N; i++) {
+        /* strncmp over the field's own size is an equality test here, both
+         * strings being shorter than it — and strcmp would be a thirteenth
+         * undefined symbol in a file whose list is checked. */
+        if (strncmp(name, TOOLS[i].name, VOICE_TOOL_NAME_BYTES) == 0) {
+            TOOLS[i].run(out, cap);
+            return;
+        }
+    }
+    /* A name this watch does not have, which the brain invented. Saying so is
+     * better than an empty result: the model can apologise for it, where a
+     * blank reads as a watch that does not know what time it is. */
+    snprintf(out, cap, "no such tool on this watch");
+}
+
+typedef struct {
+    char id[VOICE_TOOL_ID_BYTES];
+    char name[VOICE_TOOL_NAME_BYTES];
+    char args[VOICE_TOOL_ARGS_BYTES];
+} tool_call_t;
+
+/* The calls in one reply, scanned rather than parsed, the same reduction the
+ * rest of the JSON here makes.
  *
- * Thinking is turned off twice, and which of the two does the work was
+ * "id" and "function" are siblings inside a call and either can be written
+ * first, so both are looked for from the same place and the name is taken
+ * from inside the function object whichever way round they came. Advancing to
+ * the later of the two is what steps to the next call: everything left after
+ * it belongs either to this call's function object or to the calls after it,
+ * and neither holds an "id" of its own.
+ *
+ * The one thing this cannot read is a tool argument that is itself a JSON
+ * document with an "id" in it — the escaped quotes still look like a key. No
+ * tool here takes arguments at all, and the day one does, it wants a parser. */
+static size_t tool_calls_scan(const char * json, tool_call_t * calls, size_t max)
+{
+    const char * at = json_key(json, "tool_calls");
+    size_t n = 0;
+
+    if (at == NULL) return 0;
+
+    while (n < max) {
+        const char * id = json_key(at, "id");
+        const char * fn = json_key(at, "function");
+
+        if (id == NULL || fn == NULL) break;
+        if (!json_string(at, "id", calls[n].id, sizeof calls[n].id)) break;
+        if (!json_string(fn, "name", calls[n].name, sizeof calls[n].name)) break;
+        /* Argument-less calls come back as "{}", as "" or not at all,
+         * depending on the server. All three mean the same thing. */
+        if (!json_string(fn, "arguments", calls[n].args, sizeof calls[n].args) ||
+            calls[n].args[0] == '\0') {
+            snprintf(calls[n].args, sizeof calls[n].args, "{}");
+        }
+        n++;
+        at = id > fn ? id : fn;
+    }
+    return n;
+}
+
+/* One line of "get_time -> 09:41, get_date -> ...", appended and clamped. At
+ * the cap it stops rather than wrapping, and *at lands on cap so the calls
+ * after it do nothing. */
+static void log_add(char * ran, size_t cap, size_t * at, const char * name,
+                    const char * answer)
+{
+    int wrote;
+
+    if (ran == NULL || *at >= cap) return;
+    wrote = snprintf(ran + *at, cap - *at, "%s%s -> %s",
+                     *at > 0 ? ", " : "", name, answer);
+    *at += (wrote < 0 || (size_t) wrote >= cap - *at) ? cap - *at : (size_t) wrote;
+}
+
+bool voice_chat_start(voice_chat_t * chat, const char * heard)
+{
+    /* A platform that never named the assistant still gets a prompt with the
+     * default name in it, rather than an empty system message. */
+    if (system_prompt[0] == '\0') voice_name_set(NULL);
+
+    chat->rounds = 0;
+    return voice_buf_str(&chat->messages, "{\"role\":\"system\",\"content\":") &&
+           json_quote(&chat->messages, system_prompt) &&
+           voice_buf_str(&chat->messages, "},{\"role\":\"user\",\"content\":") &&
+           json_quote(&chat->messages, heard) &&
+           voice_buf_str(&chat->messages, "}");
+}
+
+/* Thinking is turned off twice, and which of the two does the work was
  * measured rather than assumed. Against oMLX with Qwen3.8-27B, the top-level
  * enable_thinking has no effect at all — three requests out of three came
  * back with the reply starting "Thinking: 1. Analyze the Request ...", every
@@ -842,13 +1052,9 @@ bool voice_tts_body(voice_buf_t * body, const char * text,
  * internal/openai sends only the top-level one, and against this server it
  * has the same problem.
  */
-bool voice_brain_body(voice_buf_t * body, const char * heard)
+bool voice_chat_body(voice_chat_t * chat, voice_buf_t * body)
 {
     char tokens[16];
-
-    /* A platform that never named the assistant still gets a prompt with the
-     * default name in it, rather than an empty system message. */
-    if (system_prompt[0] == '\0') voice_name_set(NULL);
 
     snprintf(tokens, sizeof tokens, "%d", VOICE_BRAIN_MAX_TOKENS);
 
@@ -858,9 +1064,64 @@ bool voice_brain_body(voice_buf_t * body, const char * heard)
                                ",\"chat_template_kwargs\":{\"enable_thinking\":false}"
                                ",\"max_tokens\":") &&
            voice_buf_str(body, tokens) &&
-           voice_buf_str(body, ",\"messages\":[{\"role\":\"system\",\"content\":") &&
-           json_quote(body, system_prompt) &&
-           voice_buf_str(body, "},{\"role\":\"user\",\"content\":") &&
-           json_quote(body, heard) &&
-           voice_buf_str(body, "}]}");
+           tools_declare(body) &&
+           voice_buf_str(body, ",\"messages\":[") &&
+           voice_buf_add(body, chat->messages.data, chat->messages.len) &&
+           voice_buf_str(body, "]}");
+}
+
+bool voice_chat_tools(voice_chat_t * chat, const char * json,
+                      char * ran, size_t cap)
+{
+    tool_call_t calls[VOICE_TOOL_MAX];
+    size_t n, i, at = 0;
+
+    if (ran != NULL && cap > 0) ran[0] = '\0';
+
+    /* Counted before the reply is looked at, so that a model which answers
+     * with a tool call every time still ends the turn. */
+    if (++chat->rounds >= VOICE_TOOL_ROUNDS) return false;
+
+    n = tool_calls_scan(json, calls, VOICE_TOOL_MAX);
+    if (n == 0) return false;
+
+    /* The brain's turn, echoed back before its results: a tool message is
+     * only an answer to a call the conversation can see, and a server given
+     * one without the other rejects the request. */
+    if (!voice_buf_str(&chat->messages,
+                       ",{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[")) return false;
+    for (i = 0; i < n; i++) {
+        if (i > 0 && !voice_buf_str(&chat->messages, ",")) return false;
+        if (!voice_buf_str(&chat->messages, "{\"id\":") ||
+            !json_quote(&chat->messages, calls[i].id) ||
+            !voice_buf_str(&chat->messages, ",\"type\":\"function\",\"function\":{\"name\":") ||
+            !json_quote(&chat->messages, calls[i].name) ||
+            !voice_buf_str(&chat->messages, ",\"arguments\":") ||
+            !json_quote(&chat->messages, calls[i].args) ||
+            !voice_buf_str(&chat->messages, "}}")) return false;
+    }
+    if (!voice_buf_str(&chat->messages, "]}")) return false;
+
+    /* One result per call and in the order they were asked for, including the
+     * ones whose name means nothing here — an unanswered call is the same
+     * rejected conversation. */
+    for (i = 0; i < n; i++) {
+        char answer[VOICE_TOOL_BYTES];
+
+        tool_run(calls[i].name, answer, sizeof answer);
+        if (!voice_buf_str(&chat->messages, ",{\"role\":\"tool\",\"tool_call_id\":") ||
+            !json_quote(&chat->messages, calls[i].id) ||
+            !voice_buf_str(&chat->messages, ",\"name\":") ||
+            !json_quote(&chat->messages, calls[i].name) ||
+            !voice_buf_str(&chat->messages, ",\"content\":") ||
+            !json_quote(&chat->messages, answer) ||
+            !voice_buf_str(&chat->messages, "}")) return false;
+        log_add(ran, cap, &at, calls[i].name, answer);
+    }
+    return true;
+}
+
+void voice_chat_free(voice_chat_t * chat)
+{
+    voice_buf_free(&chat->messages);
 }

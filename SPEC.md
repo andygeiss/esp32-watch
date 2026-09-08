@@ -80,5 +80,8 @@ point.
   the device — and the same `voice/turn.c` turns them into the same requests.
 - A chat model answers by default and the question is said back when the
   brain is set to `echo`. Both builds do whichever they were told to.
+- Asked what time or what day it is, the watch reads its own clock and tells
+  the brain, rather than letting it invent an hour. The tools that do it are
+  in `voice/turn.c`, so both builds have the same ones.
 - `make check` still passes with no oMLX server running and no `voices/` in
   the tree.

@@ -90,8 +90,9 @@ actually produced. _Avoid: utterance, query, prompt._
 `reply()` is that seam on both builds: `Qwen3.8-27B-oQ4e-mtp` by default, any
 model `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` names, and the heard
 text said back when either says **echo**. Not "the LLM" and not "the AI" — the
-watch has three services and this is the one that thinks. _Avoid: LLM, model
-(unqualified), AI, assistant._
+watch has three services and this is the one that thinks. Thinking is all it
+does: it knows nothing about this wrist, and what it needs from there it asks
+for with a [[Tool]]. _Avoid: LLM, model (unqualified), AI, assistant._
 
 **Host** — the machine a build runs the simulator on, as opposed to the device.
 Also the half of any build that knows which of the two it is: window or panel,
@@ -154,6 +155,15 @@ not shift sideways when the time changes. Montserrat's figures are proportional
 — at 118 px a `1` is 44 px where a `0` is 79 — and at this size the shift is
 impossible to miss. `--no-kerning` belongs to the same decision. _Avoid:
 monospace digits, fixed-width numerals._
+
+**Tool** — something the brain can ask the watch for because the watch knows
+it and a server cannot. Two so far, both the clock: `get_time` and `get_date`,
+reading the same `time()` the face is drawn from, so what is said and what is
+shown cannot disagree. A tool is a name, a sentence telling the model when to
+reach for it, and a function returning a short string — all portable, so both
+builds have the same ones. Not a command and not a skill: the wearer never
+names one, the brain does. _Avoid: function, function call, capability, skill,
+action._
 
 **Turn** — one exchange: a sentence arrives, is transcribed, answered and
 played back. The voice loop takes turns for as long as the assistant is awake.
