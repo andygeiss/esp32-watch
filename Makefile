@@ -9,12 +9,19 @@ BIN = build/kai_sim
 .PHONY: bench build check ci clean firmware flash run test
 
 # Where a turn's seconds go, against whichever server .env points at. Takes a
-# run count: `make bench RUNS=5`. Sources .env the way run does and for the
-# same reason — it needs an address and a key — which is exactly why it is not
-# in check: a gate that reads one machine's file is a gate that passes on one
-# machine, and this one also needs a server, a network and voices/.
+# run count and a brain: `make bench RUNS=5 BRAIN=some-faster-model`. Sources
+# .env the way run does and for the same reason — it needs an address and a
+# key — which is exactly why it is not in check: a gate that reads one
+# machine's file is a gate that passes on one machine, and this one also needs
+# a server, a network and voices/.
+#
+# BRAIN goes on after the sourcing rather than before it, because .env sets
+# WATCH_BRAIN_MODEL and would otherwise win. That ordering is the whole point:
+# comparing two brains has to be one command, or it is not a comparison
+# anybody makes twice.
 bench: build
-	set -a; if [ -f .env ]; then . ./.env; fi; set +a; ./build/kai_bench $(RUNS)
+	set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
+	$(if $(BRAIN),WATCH_BRAIN_MODEL="$(BRAIN)") ./build/kai_bench $(RUNS)
 
 # CMake owns the dependency tracking. Re-running the configure step costs
 # nothing and is what makes a fresh clone build in one command.

@@ -1031,10 +1031,15 @@ default configuration is not proof the voice path compiles. Set a URL in
 ### The benchmark
 
 `make bench` times one turn against whichever server `.env` points at and
-prints where its seconds went. `make bench RUNS=5` runs it five times; three
-is the default, which is enough for a median and about half a minute.
+prints where its seconds went. `RUNS` sets how many turns; three is the
+default, which is enough for a median and about half a minute. `BRAIN` swaps
+the model for that run without touching `.env`, which is what makes comparing
+two of them one command:
 
     make bench
+    make bench RUNS=5
+    make bench BRAIN=some-faster-model
+    make bench BRAIN=echo              # the floor: no brain at all
 
 It is `host/bench.c`, the fourth host, and the reason it is a C program rather
 than a script is the reason `voice/turn.c` exists: it asks the same three
@@ -1079,11 +1084,33 @@ Three things that table says, and the third is the useful one:
   Go orchestrator is that chunker and is still not translated. Against a
   factor above 1.0 it would buy nothing; at 0.68 it buys most of the wait.
 
+`BRAIN=echo` is the floor and worth knowing: **4.6 s** with the brain at zero,
+against **9.7 s** with it. That is the size of the prize — a faster brain can
+take about five and a half seconds out of a turn and no more, because the
+other four are the two audio services.
+
+**A faster brain is the obvious next move and there was not one to move to.**
+A dense 27B is far more than one or two spoken sentences needs, and this
+server does list the thing to replace it with: `Qwen3.8-Flash-Next-4bit-paged`,
+a mixture-of-experts model — its loader names `switch_mlp`, which is the MoE
+layer. It does not load. `Missing 560 parameters`, and after the failed load
+the server dropped it from `/v1/models` altogether, so it is a broken
+checkpoint on the server rather than anything the watch can configure around.
+Worth retrying whenever the model list changes: `make bench BRAIN=` is one
+command precisely so that retry costs nothing.
+
 The numbers move with the model, the network and the length of the reference
 clip, which is why this is a command rather than a paragraph. Older readings
 from the same machine, for scale: an oMLX at `127.0.0.1:8000` transcribed 3 s
 of speech in **0.9 s** and synthesised it in **2.6-3.3 s**, and the brain has
 been seen anywhere from **6 s to 11 s** depending on the answer's length.
+
+**The tools are reliable on the 27B, which is the thing a faster brain has to
+keep.** Ten questions out of ten reached for the right one — five *Wie spät
+ist es?* to `get_time` and five *Welcher Tag ist heute?* to `get_date`. That
+is the check any replacement has to pass before its latency is worth reading,
+because a brain that answers in one second by inventing the hour has made the
+watch worse, not faster.
 
 None of `host/voice.c` is in `check`. The gate has to stay runnable on a Mac
 with nothing on it, so `kai_test` never links it and `ui/` cannot reach it at
