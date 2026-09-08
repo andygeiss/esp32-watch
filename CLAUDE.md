@@ -97,8 +97,8 @@ in the same bag and say nothing.
 - **`voice/` — portable, and one notch stricter.** `turn.c` and `turn.h` are
   everything about a turn that is not a device: the words the watch answers
   to, the gate that ends a turn, the JSON, the base64, the WAV, both request
-  bodies, and the tools the brain can reach for. The C standard library and
-  *nothing else* — not even LVGL.
+  bodies, the clock the brain is told and where a reply may be cut. The C
+  standard library and *nothing else* — not even LVGL.
   `voice.h` beside them is the five-function contract the two platform halves
   both implement. Both builds compile `turn.c` unchanged.
 - **`host/` — host only.** `main.c` for the SDL window, input devices, tick
@@ -583,7 +583,7 @@ One loop, four files:
 
 | | |
 |---|---|
-| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, the tools and all three request bodies. Compiled into both builds unchanged |
+| `voice/turn.c` | **portable.** The words, the gate, the JSON, the base64, the WAV, the URL, which models answer, the clock in the prompt, the chunker and all three request bodies. Compiled into both builds unchanged |
 | `host/speech.c` | where the server is, a hand-written request over a socket or OpenSSL, the reference clip, and `transcribe`/`reply`/`synthesise` |
 | `host/voice.c` | the SDL microphone, the SDL speaker, the gate and an `SDL_Thread` |
 | `firmware/main/voice.c` | the ES7210, `esp_http_client`, the ES8311, a FreeRTOS task |
@@ -639,112 +639,129 @@ chunker is the other half of that job and is deliberately not translated yet:
 it cuts a streaming reply at sentence seams so speech starts before the text
 is finished, and with an echo there is nothing to stream.
 
-### The tools
+### The clock, and why it is not a tool
 
-**A watch that has to ask a server what time it is has failed at the one
-thing it is.** The brain runs in a rack: it does not know the hour on this
-wrist, it does not know which side of the planet the wrist is on, and asked
-anyway it does not say so — it invents an hour, confidently, in a sentence
-that sounds exactly like a right answer. That is the one wrong answer a watch
-cannot afford, and it is why the first two tools are the clock:
+**A watch that has to ask a server what time it is has failed at the one thing
+it is.** The brain runs in a rack: it does not know the hour on this wrist, it
+does not know which side of the planet the wrist is on, and asked anyway it
+invents one — confidently, in a sentence that sounds exactly like a right
+answer. So the watch tells it, in the last sentence of the system prompt:
 
-| | |
-|---|---|
-| `get_time` | `13:03` — the local hour and minute, 24-hour |
-| `get_date` | `2026-09-08 (Tuesday)` — ISO, with the weekday spelled out |
+    The watch's own clock reads 13:44 — thirteen hours and forty-four
+    minutes, in the afternoon — on Tuesday, 8 September 2026.
 
-Both read `time()` and `localtime_r()`, which is the *same clock `ui.c` draws
-the face from*. That is the whole point of them being in `voice/turn.c`: one
-clock read twice, so what the watch says and what it shows cannot disagree.
-It is also the two symbols `turn.o` grew by, and on the device it means the
-spoken time is SNTP's if there is WiFi and the boot counter's if there is
-not — the same thing the digits are, honestly wrong in the same way rather
-than wrong in a second way of its own.
+It reads the same `time()` and `localtime_r()` `ui.c` draws the face from,
+which is the point of it living in `voice/turn.c`: one clock read twice, so
+what the watch says and what it shows cannot disagree. `voice_chat_start()`
+rebuilds the prompt every turn, because the clock at the end of it is only
+true for a minute.
 
-The weekday is spelled out rather than left to be worked out from the date,
-because that arithmetic is exactly what models get wrong, and `tm_wday` is
-already sitting in the struct. It is written in English because that is the
-language of a machine-readable date; the system prompt's *answer in the
-language the question was asked in* is what turns it back into `Dienstag`.
+**It was two tools first, and the measurement is what moved it.** `get_time`
+and `get_date` worked — the brain called them reliably — but a tool call is a
+second request, which put about five seconds on the commonest question anyone
+asks a watch. Twelve readings each, four times of day, same model:
 
-**A tool is a name, a sentence, and a function**, and the sentence is doing
-most of the work. `TOOLS[]` in `turn.c` is the whole declaration, and each
-description ends by telling the model it has no other way to know — without
-that clause a model will happily answer from the air. Nothing in a tool is a
-device, so all of it is on the portable side and both builds get the same
-ones. What the watch knows and a server cannot is the whole of what belongs
-here: the clock now, the charge and the radio when there is a gauge to read
-them off.
+| | right | brain |
+|---|---|---|
+| as a tool | 10/12 | 10.1 s |
+| in the prompt | **11/12** | **2.1 s** |
 
-**One question is now more than one request**, which is the real change. The
-brain asks, the watch answers, and *the whole conversation goes back with both
-in it* — a tool result is only an answer to a call the conversation can still
-see, and a server handed one without the other rejects it. So `voice_chat_t`
-accumulates the messages instead of `voice_brain_body()` rebuilding them out
-of `heard` each time, and `reply()` on both platforms is a short loop around
-the same three lines it always was. Everything in it is portable except the
-POST, which is the same split the rest of this file makes.
+Not slower *and* not more accurate: a quarter of the time for the same
+answer. The hour errors that remain are the model's own — Qwen3.8-27B says
+`vierzehn Uhr` for 13:44 about once in ten whichever way it is told, and an
+instruction not to convert the hour made it worse rather than better, so
+there is not one.
 
-Four things about it were measured against oMLX and `Qwen3.8-27B-oQ4e-mtp`,
-not assumed, and all four are load-bearing:
+**Declaring tools at all costs three seconds a turn**, which is the other half
+of the case and was the surprise. The same question with those two offered and
+*not called* answered in 5.2 s where an identical prompt without them answered
+in 2.2 s. Three hundred-odd tokens of JSON schema in front of every question
+is not free on a 27B, so an unused tool is not a door left open, it is a
+tax.
 
-- **The server honours `tools` alongside `enable_thinking:false`.** Those are
-  the two settings most likely to fight, since tool selection is the kind of
-  thing a reasoning model does in its scratchpad. They do not: asked *Wie spät
-  ist es?* the model came back `finish_reason: "tool_calls"` with a clean call
-  to `get_time`, and no `Thinking:` preamble anywhere.
-- **A reply can carry a tool call *and* a sentence.** Asked *Welcher Tag ist
-  heute?*, the model called `get_date` and wrote `Ich muss das Datum erst von
-  der Uhr ablesen.` beside it. So `voice_chat_tools()` looks at the calls
-  before the words, and that order is the load-bearing part: read the words
-  first and the watch says the model clearing its throat and then stops,
-  never having asked the clock, on the one question it was given a clock for.
-- **Two calls arrive in one message.** *Welcher Wochentag ist heute und wie
-  spät ist es?* returned `get_time` and `get_date` together. `VOICE_TOOL_MAX`
-  is 4 rather than 1 because of that measurement and not in case of it — a
-  call left without a result of its own is a rejected conversation, so
-  handling only the first would break precisely the question that wants both
-  tools.
-- **A question that needs neither still gets neither.** *Wer bist du?* came
-  back as plain words with no `tool_calls` at all, which is what says the
-  tools cost nothing on the turns that do not use them.
+Three things about the sentence are load-bearing, all measured against the
+same model:
 
-**The speaker cannot say digits, and the tools are what made that matter
-every time.** `Es ist 13:44 Uhr.` is the correct sentence, and it is not what
-comes out of the watch: spoken through `chatterbox-multilingual-v3` and
-transcribed straight back it reads `Es ist 13,4 Uhr.` — the right time, said
-wrong, which is worse than no answer because it sounds like one. Told to write
-words instead, the same model returns `Es ist dreizehn Uhr vierundvierzig.`,
-and *that* transcribes back as 13:44. So `VOICE_SYSTEM_FMT` carries a line
-forbidding digits, and it sits there rather than in the tools for a plain
-reason: every language spells its own numbers, the brain already knows which
-one it is answering in, and `turn.c` would need a speller per language to do
-the same job worse. The tools still hand over `13:44`, which is unambiguous
-and language-neutral; turning it into speech is the brain's half.
+- **Last, not first.** The same clock at the *front* of the prompt read wrong
+  half the time; at the end, once in twelve. A rule is something to obey and
+  the clock is something to use, and the model treats whatever is nearest the
+  question as the thing to use.
+- **Digits and words both.** `13:44` on its own gave `zwei Uhr
+  vierundvierzig`. The words are what it translates; the digits are what it
+  checks them against.
+- **The part of the day in English, not a twelve-hour clock.** Written as
+  `12:07 at night`, midnight came back as `zwölfsieben Uhr`, twice.
 
-This was never only about the clock — any answer with a number in it went out
-mangled, and had done since the brain went in. What the tools changed is that
-the commonest question anyone asks a watch now guarantees a number in the
-answer, so a bug that used to be occasional became the first thing you hear.
-Speaking a candidate sentence and transcribing it back is how it was found and
-is the way to check the next one; it is the same round trip that showed
-`Hey Lissi` arriving as `Halusy`.
-
-`VOICE_TOOL_ROUNDS` caps a model that will not stop asking: three replies is
-two rounds of tools and then an answer, one more than anything here needs.
-Past it the last reply is spoken if it had anything to say and the turn is
-silent if it did not — the same silence any other broken turn makes.
+**The tool machinery is still there and its table is empty**, which is a
+decision rather than an oversight. What makes the clock a bad tool is exactly
+what would make a good one: the clock is a fact the watch always has, so it
+costs nothing to say every time and belongs in the prompt. A tool earns its
+request by being something the brain cannot be told in advance — an alarm to
+set, a timer to start, something to look up. **Facts in the prompt, actions
+through a tool** is the rule, and the day there is an action, `TOOLS[]` is
+what it plugs into. An empty table sends no `tools` field, so nothing dormant
+is on the wire or in those three seconds. The loops count with `!=` rather
+than `<` for that reason too: `i < TOOL_N` with an empty table is
+`unsigned < 0`, which GCC warns about on the device and clang does not, and a
+portable file that warns on one of its two toolchains is one whose warnings
+stop being read.
 
 **The scanner is still a scanner.** Reading a tool call out of a reply is the
 one place it nearly was not enough: every call carries `"type":"function"`
 beside the `"function"` key, so a plain `strstr` for the key lands on the
 value. `json_key()` is that fix — it requires the colon — and `json_string()`
-goes through it now too, which it always should have. Within a call, `"id"`
-and `"function"` are siblings in either order, so both are looked for from the
-same place and the name is taken from inside the function object whichever way
-round they came. The one shape this cannot read is a tool argument that is
-itself a JSON document with an `"id"` in it; no tool here takes arguments at
-all, and the day one does, it wants a parser rather than another special case.
+goes through it now too, which it always should have.
+
+### The chunker
+
+**A reply is synthesised before a word of it is heard**, so the wearer waits
+for the whole of it. `voice_chunk_next()` cuts it at a sentence seam, and
+`speak()` on both platforms synthesises and plays a piece at a time.
+
+Whether that helps or stutters is arithmetic, and the constants were measured
+against `chatterbox-multilingual-v3` rather than assumed. A request costs
+about **0.85 s fixed** — most of it the 217 kB reference clip, which goes up
+again on every one — plus about **37 ms per character**; what comes back plays
+at about **65 ms per character**:
+
+| characters | request | audio |
+|---|---|---|
+| 3 | 1569 ms | 1.0 s |
+| 13 | 1329 ms | 1.2 s |
+| 35 | 1999 ms | 2.3 s |
+| 85 | 4021 ms | 5.5 s |
+
+While a chunk of C characters is spoken, the next has 0.065·C seconds to be
+made in and needs 0.85 + 0.037·C, so `0.85 + 0.037C <= 0.065C` gives
+**C >= 30**. Under thirty characters the synthesiser falls behind and the
+reply comes out in pieces with silence between them, which is worse than
+waiting. `VOICE_CHUNK_MIN` is twice that.
+
+**Most replies are one chunk, and that is the right answer rather than a
+missed opportunity.** The system prompt asks for one or two short sentences,
+and splitting an 85-character reply measured 1.3 s to the first piece and then
+2.3 s of silence, where not splitting it waits 4 s once. The chunker earns its
+keep on the long tail — a 176-character reply cuts 112/63 and starts speaking
+2.4 s sooner — and stays out of the way on the rest. `MIN` does a second job
+for free: it is what stops `z.B.` splitting a sentence, there never being
+enough text in front of an abbreviation to be worth cutting.
+
+**It buys less on the device than on the host, and the reason is worth
+knowing.** `board_speaker_write()` blocks until the samples are in the I2S DMA
+ring, and the ring is far smaller than a sentence, so nothing is synthesised
+while a piece is being said — where SDL plays out of a queue and the host
+makes the next piece during the current one. The watch still hears the first
+sentence sooner, but between pieces there is a pause the length of the next
+one's synthesis. Overlapping it wants a second task writing out of a ring
+buffer, which is the shape the interrupt will want too, and is not worth
+building against hardware that has never been run.
+
+**What none of this touches is the brain**, which is still the largest single
+piece of a turn. The chunker hides synthesis behind playback; only streaming
+the reply out of the brain would hide the brain, and that wants an SSE parser
+and an incremental `http_post` on both platforms. The chunker is the half of
+that pair that had to exist first — a stream with nothing to cut it at is only
+a second parser for the same text.
 
 **The transcriber is the wake-word engine.** There is no button and no
 wake-word model, so the microphone is open from start-up, every utterance in
@@ -1073,9 +1090,10 @@ Three things that table says, and the third is the useful one:
 - **Transcription is not the problem.** A quarter of a second for five seconds
   of speech, and the first run's 558 ms is the TLS handshake being paid once.
 - **The brain is 59% of the turn**, which is where to look first and the
-  reason the model name is configuration. It is also what a tool call doubles:
-  a question that reaches for the clock makes two of these requests, so
-  *Wie spät ist es?* costs about five seconds more than *Wer bist du?*.
+  reason the model name is configuration. That reading is from before the
+  clock moved into the prompt; the same brain answered in **2.1 s** once its
+  two tool declarations came out, which is where most of a clock question's
+  cost went.
 - **Synthesis runs at 0.68x real time**, and that is the argument for the
   chunker written as a number. The server produces speech faster than the
   speech takes to say, so a reply cut at its first sentence seam could start

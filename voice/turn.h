@@ -337,26 +337,48 @@ const voice_models_t * voice_models_get(void);
  * back as 13:44. So the digits are spelled out here rather than in the tools:
  * every language spells its own numbers and the brain already knows which one
  * it is answering in, where turn.c would need a speller per language to do
- * the same job worse. It is not only the clock either — any answer with a
- * number in it went out mangled, and the tools are simply what made that
- * happen every single time.
+ * the same job worse.
  *
- * The name in it is the one part that is configuration, because it is the
- * answer to "who are you?" and that is a thing an owner gets to decide.
+ * **The clock is the last thing in it, and every part of that was measured.**
+ * It used to be a tool the brain called, which cost a second request — about
+ * five seconds — on the commonest question anyone asks a watch. Moved in
+ * here it costs nothing, and against Qwen3.8-27B it is no less accurate:
+ * twelve readings each, four times of day, the tool got ten right in a median
+ * of 10.1 s and the prompt eleven in 2.1 s. The hour errors that remain are
+ * the model's own — it says "vierzehn Uhr" for 13:44 about once in ten
+ * whichever way it is told — and an instruction not to convert the hour made
+ * it worse rather than better, so there is not one.
  *
- * BYTES went from 512 to 640 when that line went in: the prompt is 420 bytes
- * with the longest name that fits, and a snprintf that runs out here does not
- * fail, it truncates — which would cut a rule off mid-sentence and leave the
- * brain following most of one. */
+ * Three things about the sentence are load-bearing, all of them measured
+ * against the same model:
+ *
+ * - **Last, not first.** The same clock at the front of the prompt read
+ *   wrong half the time; at the end, once in twelve. A rule is something to
+ *   obey and the clock is something to use, and the model treats whatever is
+ *   nearest the question as the thing to use.
+ * - **Digits and words both.** "13:44" alone gave "zwei Uhr vierundvierzig".
+ *   The words are what it translates; the digits are what it checks them
+ *   against.
+ * - **The part of the day in English, not a twelve-hour clock.** Written as
+ *   "12:07 at night", midnight came back as "zwölfsieben Uhr", twice.
+ *
+ * The name is the one part of all this that is configuration, because it is
+ * the answer to "who are you?" and that is a thing an owner gets to decide.
+ *
+ * BYTES has to hold the rules, the longest name and the clock sentence.
+ * A snprintf that runs out here does not fail, it truncates — and what it
+ * would cut off is the clock, because the clock is last. */
 #define VOICE_BRAIN_MAX_TOKENS 256
-#define VOICE_SYSTEM_BYTES     640
+#define VOICE_CLOCK_BYTES      128
+#define VOICE_SYSTEM_BYTES     768
 #define VOICE_SYSTEM_FMT                                                      \
     "You are %s, the voice of a wristwatch. Answer in the language the "      \
     "question was asked in. Keep it to one or two short sentences: every "    \
     "word is read aloud through a small speaker. Write numbers, times and "   \
     "dates as words and never as digits, because the voice that reads your "  \
     "answer aloud cannot say digits. No markdown, no lists, no emoji and no " \
-    "stage directions — only what should be said."
+    "stage directions — only what should be said. "                           \
+    "The watch's own clock reads %s."
 
 /** The whole body of a transcription request: one WAV in a multipart form. */
 bool voice_stt_body(voice_buf_t * body, const int16_t * pcm, size_t samples);
@@ -499,6 +521,69 @@ bool voice_brain_text(const char * json, char * out, size_t cap);
 
 /** Base64, for the clip. Encoded once: it is the same bytes on every request. */
 char * voice_base64(const unsigned char * in, size_t len);
+
+/* ------------------------------------------------------------------ */
+/* The chunker: where a reply is cut so speech can start sooner.              */
+/* ------------------------------------------------------------------ */
+
+/* A reply is synthesised before a word of it is heard, so the wearer waits
+ * the whole of it. Cut at a sentence seam, the first piece is spoken while
+ * the rest is still being made, and the wait becomes the length of one
+ * sentence instead of the length of the answer.
+ *
+ * Whether that is a win or a stutter is arithmetic, and the numbers were
+ * measured against chatterbox-multilingual-v3 rather than guessed. A request
+ * costs about **0.85 s fixed** — most of it the 217 kB reference clip, which
+ * goes up again on every one — plus about **37 ms per character**. What comes
+ * back plays at about **65 ms per character**. So while a chunk of C
+ * characters is being spoken, the next one has 0.065*C seconds to be made in,
+ * and it needs 0.85 + 0.037*C:
+ *
+ *     0.85 + 0.037*C <= 0.065*C   ->   C >= 30
+ *
+ * Under thirty characters the synthesiser falls behind and the reply comes
+ * out in pieces with silence between them, which is worse than waiting. MIN
+ * is twice that, which leaves the margin to cover a slow first request and a
+ * short last chunk.
+ *
+ * MIN does a second job for free: it is what stops an abbreviation splitting
+ * a sentence. "z.B." is a full stop with a space after it and looks exactly
+ * like a seam; what saves it is that there is never enough text in front of
+ * it to be worth cutting.
+ *
+ * A reply shorter than MIN + MIN is one chunk, which is most of them — the
+ * system prompt asks for one or two short sentences. That is the right
+ * answer rather than a missed opportunity: splitting an 85-character reply
+ * measured 1.3 s to the first piece and then 2.3 s of silence, where not
+ * splitting it just waits 4 s once. The chunker earns its keep on the long
+ * ones, and stays out of the way on the rest. */
+#define VOICE_CHUNK_MIN   60
+#define VOICE_CHUNK_MAX  240
+
+/* MAX plus the most a stub can add to it, plus the terminator. A chunk that
+ * swallowed a short remainder is longer than MAX by up to MIN, and a buffer
+ * sized MAX + 1 would have quietly dropped the difference — the tail of the
+ * reply, never spoken and never logged. */
+#define VOICE_CHUNK_BYTES (VOICE_CHUNK_MAX + VOICE_CHUNK_MIN + 1)
+
+/** How far through a reply the chunker is. Owned by the caller. */
+typedef struct {
+    const char * text;
+    size_t       at;
+} voice_chunk_t;
+
+/** Begin cutting `text`, which must outlive the chunker. */
+void voice_chunk_start(voice_chunk_t * chunk, const char * text);
+
+/**
+ * The next piece to synthesise, or false when there is none left. Pieces are
+ * cut at `.`, `!` or `?` once there is MIN worth of text to cut, and at the
+ * last comma or space before MAX when a sentence runs on past it. Whatever is
+ * left when the remainder would be shorter than MIN goes out with the piece
+ * before it, so a reply never ends on "Ja." alone — a three-character request
+ * costs the same 0.85 s as a useful one.
+ */
+bool voice_chunk_next(voice_chunk_t * chunk, char * out, size_t cap);
 
 /* ------------------------------------------------------------------ */
 /* WAV, so the reply can be played at whatever rate it came back at.          */

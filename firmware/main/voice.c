@@ -314,31 +314,76 @@ static size_t record(uint32_t patience_ms)
  * half-duplex loop has none of — the same reason the microphone and speaker
  * corners are two flags rather than one mode. ESP-SR gives the S3 that, and
  * the interrupt comes back with it. */
-static void play(const unsigned char * file, size_t len)
+/* Puts one piece of the reply on the speaker. The device is opened by the
+ * caller and stays open for the whole reply: opening it closes the
+ * microphone, one I2S bus being one clock, so doing that per piece would
+ * click between sentences as well as costing the switch. */
+static bool play_piece(const unsigned char * file, size_t len, int * rate)
 {
     voice_wav_t wav;
     size_t at = 0;
 
     if (!voice_wav_open(file, len, &wav)) {
         ESP_LOGW(TAG, "the reply is not a WAV this can play");
-        return;
+        return false;
     }
 
     /* The server has answered 24 kHz mono every time, but it says so in the
-     * header rather than promising it, so the watch follows the file. Opening
-     * the speaker closes the microphone: one I2S bus, one clock. */
-    if (!board_speaker_open(wav.rate, wav.channels, wav.bits)) return;
+     * header rather than promising it, so the watch follows the file. */
+    if (*rate == 0) {
+        if (!board_speaker_open(wav.rate, wav.channels, wav.bits)) return false;
+        *rate = wav.rate;
+        atomic_store(&speaking, true);
+    }
+    else if (wav.rate != *rate) {
+        ESP_LOGW(TAG, "a piece came back at %d Hz, not %d — skipping it",
+                 wav.rate, *rate);
+        return false;
+    }
 
-    atomic_store(&speaking, true);
     while (at < wav.bytes && atomic_load(&running)) {
         size_t chunk = wav.bytes - at;
         if (chunk > 4096) chunk = 4096;
         if (!board_speaker_write(wav.pcm + at, chunk)) break;
         at += chunk;
     }
-    atomic_store(&speaking, false);
+    return true;
+}
 
-    board_speaker_close();
+/* Says a reply, a piece at a time, the same way host/voice.c does and out of
+ * the same voice/turn.c — most replies come back as one piece.
+ *
+ * **It buys less here than it does on the host, and the reason is worth
+ * knowing.** board_speaker_write() blocks until the samples are in the I2S
+ * DMA ring, and the ring is far smaller than a sentence, so writing a piece
+ * takes about as long as saying it. Nothing is synthesised during that, where
+ * on the host SDL plays out of a queue and the next piece is made while this
+ * one is spoken. So the watch hears the first sentence sooner — that part is
+ * the same — but between the pieces there is a pause the length of the next
+ * one's synthesis, where the simulator has none.
+ *
+ * Overlapping it wants a second task writing out of a ring buffer this fills,
+ * which is the shape the interrupt will want too and is not worth building
+ * against hardware that has never been run. Until then the pieces are the
+ * same pieces, and this file is still the same loop as the host's. */
+static void speak(const char * text)
+{
+    voice_chunk_t chunk;
+    char piece[VOICE_CHUNK_BYTES];
+    int rate = 0;
+
+    voice_chunk_start(&chunk, text);
+    while (atomic_load(&running) && voice_chunk_next(&chunk, piece, sizeof piece)) {
+        voice_buf_t wav = { 0 };
+
+        if (synthesise(piece, &wav)) play_piece((const unsigned char *) wav.data, wav.len, &rate);
+        voice_buf_free(&wav);
+    }
+
+    if (rate != 0) {
+        atomic_store(&speaking, false);
+        board_speaker_close();
+    }
 }
 
 /* What the assistant answers, into out. The same two modes the simulator has,
@@ -399,7 +444,6 @@ static void loop(void * unused)
          * each — see VOICE_TASK_STACK. */
         static char heard[VOICE_MAX_TEXT];
         static char answer[VOICE_MAX_TEXT];
-        voice_buf_t wav = { 0 };
         const char * say;
         size_t samples;
 
@@ -457,10 +501,7 @@ static void loop(void * unused)
         if (!reply(say, answer, sizeof answer)) continue;
         if (voice_models_get()->brain[0] != '\0') ESP_LOGI(TAG, "answering \"%s\"", answer);
 
-        if (synthesise(answer, &wav)) {
-            play((const unsigned char *) wav.data, wav.len);
-        }
-        voice_buf_free(&wav);
+        speak(answer);
     }
 
     board_mic_close();
@@ -585,8 +626,15 @@ void voice_start(void)
     if (voice_models_get()->brain[0] != '\0') {
         char tools[VOICE_TOOL_LOG_BYTES];
 
-        ESP_LOGI(TAG, "thinking with %s, and it can ask for %s",
-                 voice_models_get()->brain, voice_tool_list(tools, sizeof tools));
+        /* The table is empty today — the clock is in the system prompt, not a
+         * tool — so the list only gets said when there is something in it. */
+        if (voice_tool_list(tools, sizeof tools)[0] != '\0') {
+            ESP_LOGI(TAG, "thinking with %s, and it can ask for %s",
+                     voice_models_get()->brain, tools);
+        }
+        else {
+            ESP_LOGI(TAG, "thinking with %s", voice_models_get()->brain);
+        }
     }
     else {
         ESP_LOGI(TAG, "brain is \"%s\" — the answer is the question said back",

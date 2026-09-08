@@ -171,14 +171,33 @@ static size_t record(uint32_t patience_ms)
  * half-duplex loop has none of — the same reason the microphone and speaker
  * corners are two flags rather than one mode. ESP-SR gives the S3 that, and
  * the interrupt comes back with it. */
-static void play(const unsigned char * file, size_t len)
+/* Waits for whatever is queued to finish, then stops the device. Called at
+ * the end of a reply, and again if a piece comes back in a different format
+ * than the one before it — reopening the device mid-reply would cut the
+ * previous piece off in the middle of a word. */
+static void play_drain(void)
+{
+    if (speaker == 0) return;
+    while (SDL_GetQueuedAudioSize(speaker) > 0 && SDL_AtomicGet(&running)) {
+        SDL_Delay(VOICE_BLOCK_MS);
+    }
+    SDL_PauseAudioDevice(speaker, 1);
+    SDL_AtomicSet(&speaking, 0);
+}
+
+/* Puts one piece of the reply on the speaker and returns without waiting for
+ * it. That is the whole of what makes the chunker worth having here: SDL
+ * plays out of a queue, so the next piece is synthesised while this one is
+ * still being said, and the wearer hears the first sentence at the end of its
+ * own synthesis rather than the whole reply's. */
+static bool play_queue(const unsigned char * file, size_t len)
 {
     voice_wav_t wav;
     SDL_AudioSpec want;
 
     if (!voice_wav_open(file, len, &wav)) {
         SDL_Log("voice: the reply is not a WAV this can play");
-        return;
+        return false;
     }
 
     memset(&want, 0, sizeof(want));
@@ -191,24 +210,48 @@ static void play(const unsigned char * file, size_t len)
      * header rather than promising it, so the device follows the file. */
     if (speaker == 0 || speaker_spec.freq != want.freq ||
         speaker_spec.channels != want.channels || speaker_spec.format != want.format) {
-        if (speaker != 0) SDL_CloseAudioDevice(speaker);
+        if (speaker != 0) {
+            play_drain();
+            SDL_CloseAudioDevice(speaker);
+        }
         speaker = SDL_OpenAudioDevice(NULL, 0, &want, &speaker_spec, 0);
         if (speaker == 0) {
             SDL_Log("voice: no speaker: %s", SDL_GetError());
-            return;
+            return false;
         }
     }
 
     SDL_AtomicSet(&speaking, 1);
-    SDL_ClearQueuedAudio(speaker);
-    if (SDL_QueueAudio(speaker, wav.pcm, (Uint32) wav.bytes) == 0) {
-        SDL_PauseAudioDevice(speaker, 0);
-        while (SDL_GetQueuedAudioSize(speaker) > 0 && SDL_AtomicGet(&running)) {
-            SDL_Delay(VOICE_BLOCK_MS);
+    if (SDL_QueueAudio(speaker, wav.pcm, (Uint32) wav.bytes) != 0) return false;
+    SDL_PauseAudioDevice(speaker, 0);
+    return true;
+}
+
+/* Says a reply, a piece at a time. voice/turn.c decides where the pieces end
+ * — most replies are one piece, which is the right answer for a reply short
+ * enough that cutting it would only add silence.
+ *
+ * `speaking` goes up on the first piece and comes down after the last has
+ * played out, so the corner is lit for the whole reply rather than flickering
+ * between pieces. */
+static void speak(const char * text)
+{
+    voice_chunk_t chunk;
+    char piece[VOICE_CHUNK_BYTES];
+    bool queued = false;
+
+    if (speaker != 0) SDL_ClearQueuedAudio(speaker);
+
+    voice_chunk_start(&chunk, text);
+    while (SDL_AtomicGet(&running) && voice_chunk_next(&chunk, piece, sizeof piece)) {
+        voice_buf_t wav = { 0 };
+
+        if (speech_synthesise(piece, &wav)) {
+            queued = play_queue((const unsigned char *) wav.data, wav.len) || queued;
         }
+        voice_buf_free(&wav);
     }
-    SDL_PauseAudioDevice(speaker, 1);
-    SDL_AtomicSet(&speaking, 0);
+    if (queued) play_drain();
 }
 
 /* One pass is one utterance. Asleep, the only thing that matters about it is
@@ -225,7 +268,6 @@ static int loop(void * unused)
     while (SDL_AtomicGet(&running)) {
         char heard[VOICE_MAX_TEXT];
         char answer[VOICE_MAX_TEXT];
-        voice_buf_t wav = { 0 };
         const char * say;
         size_t samples;
 
@@ -276,10 +318,7 @@ static int loop(void * unused)
         if (!speech_reply(say, answer, sizeof answer)) continue;
         if (voice_models_get()->brain[0] != '\0') SDL_Log("voice: answering \"%s\"", answer);
 
-        if (speech_synthesise(answer, &wav)) {
-            play((const unsigned char *) wav.data, wav.len);
-        }
-        voice_buf_free(&wav);
+        speak(answer);
     }
     return 0;
 }
@@ -339,8 +378,15 @@ void voice_start(void)
     if (voice_models_get()->brain[0] != '\0') {
         char tools[VOICE_TOOL_LOG_BYTES];
 
-        SDL_Log("voice: thinking with %s, and it can ask for %s",
-                voice_models_get()->brain, voice_tool_list(tools, sizeof tools));
+        /* The table is empty today — the clock is in the system prompt, not a
+         * tool — so the list only gets said when there is something in it. */
+        if (voice_tool_list(tools, sizeof tools)[0] != '\0') {
+            SDL_Log("voice: thinking with %s, and it can ask for %s",
+                    voice_models_get()->brain, tools);
+        }
+        else {
+            SDL_Log("voice: thinking with %s", voice_models_get()->brain);
+        }
     }
     else {
         SDL_Log("voice: %s=%s — the answer is the question said back",

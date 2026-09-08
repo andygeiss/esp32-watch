@@ -244,11 +244,26 @@ bool voice_models_set(const voice_models_t * models)
 static char assistant_name[VOICE_NAME_BYTES] = VOICE_NAME;
 static char system_prompt[VOICE_SYSTEM_BYTES];
 
+/* Down beside the clock itself, which is the only other thing that reads it. */
+static void clock_sentence(char * out, size_t cap);
+
+/* The prompt is built rather than stored, because the clock at the end of it
+ * is only true for a minute. voice_chat_start() calls this once per turn, so
+ * what the brain is told is what the face is showing. */
+static void system_build(void)
+{
+    char clock[VOICE_CLOCK_BYTES];
+
+    clock_sentence(clock, sizeof clock);
+    snprintf(system_prompt, sizeof system_prompt, VOICE_SYSTEM_FMT,
+             assistant_name, clock);
+}
+
 bool voice_name_set(const char * name)
 {
     bool ok = setting_set(assistant_name, sizeof assistant_name, name, VOICE_NAME);
 
-    snprintf(system_prompt, sizeof system_prompt, VOICE_SYSTEM_FMT, assistant_name);
+    system_build();
     return ok;
 }
 
@@ -705,6 +720,87 @@ bool voice_brain_text(const char * json, char * out, size_t cap)
 }
 
 /* ------------------------------------------------------------------ */
+/* The chunker. See turn.h for the arithmetic that sets MIN.                  */
+/* ------------------------------------------------------------------ */
+
+static bool chunk_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/* A seam only counts with white space or the end of the reply after it, so a
+ * decimal point inside a number is not one. The prompt forbids digits, so
+ * there should be no numbers to protect — but the prompt is advice to a model
+ * and this is not. */
+static bool chunk_seam(const char * text, size_t at)
+{
+    char c = text[at];
+
+    if (c != '.' && c != '!' && c != '?') return false;
+    return text[at + 1] == '\0' || chunk_space(text[at + 1]);
+}
+
+void voice_chunk_start(voice_chunk_t * chunk, const char * text)
+{
+    chunk->text = text != NULL ? text : "";
+    chunk->at = 0;
+}
+
+bool voice_chunk_next(voice_chunk_t * chunk, char * out, size_t cap)
+{
+    const char * text = chunk->text;
+    size_t at = chunk->at;
+    size_t start, end = 0, comma = 0, space = 0, n;
+
+    while (chunk_space(text[at])) at++;
+    if (text[at] == '\0' || cap == 0) return false;
+    start = at;
+
+    for (n = 0; text[at] != '\0'; at++, n++) {
+        if (text[at] == ',' || text[at] == ';' || text[at] == ':') comma = at + 1;
+        else if (chunk_space(text[at])) space = at;
+
+        if (n + 1 >= VOICE_CHUNK_MIN && chunk_seam(text, at)) {
+            end = at + 1;
+            break;
+        }
+        if (n + 1 >= VOICE_CHUNK_MAX) {
+            /* A sentence that will not end. Cut where a reader would draw
+             * breath, and at a word boundary at worst. */
+            end = comma > start ? comma : (space > start ? space : at + 1);
+            break;
+        }
+    }
+    if (end == 0) end = at; /* the reply ran out before a seam did */
+
+    /* What is left has to be worth a request of its own; when it is not, it
+     * goes out with this piece. That is also what makes the last chunk the
+     * long one rather than the stub. */
+    {
+        size_t rest = end;
+
+        while (chunk_space(text[rest])) rest++;
+        if (text[rest] != '\0' && strlen(text + rest) < VOICE_CHUNK_MIN) {
+            end = start + strlen(text + start);
+        }
+    }
+
+    n = end - start;
+    if (n > cap - 1) {
+        /* A caller with a buffer smaller than VOICE_CHUNK_BYTES gets more
+         * pieces rather than a truncated reply: the cut moves back to what
+         * fits and the rest is the next one. Losing the tail of an answer is
+         * the one outcome here that says nothing about itself. */
+        n = cap - 1;
+        end = start + n;
+    }
+    memcpy(out, text + start, n);
+    out[n] = '\0';
+    chunk->at = end;
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* WAV. One header to write, so the recording can be posted as a file, and    */
 /* two chunks to find, so the reply can be played at whatever rate it came    */
 /* back at.                                                                   */
@@ -851,71 +947,111 @@ bool voice_tts_body(voice_buf_t * body, const char * text,
 /* for why a watch hands its own clock to the brain rather than being asked. */
 /* ------------------------------------------------------------------ */
 
-/* The same time() and localtime_r() ui.c draws the face from, which is what
- * makes the spoken answer and the digits agree: one clock, read twice. On the
- * device that clock is SNTP's if there is WiFi and the boot counter if there
- * is not, and neither this file nor the brain can tell the difference — the
- * watch says what it believes, the same as the face does. */
-static void tool_time(char * out, size_t cap)
+/* English number words, as far as a clock goes. The prompt is English and the
+ * brain answers in whatever language it was asked in, so these are what it
+ * translates rather than what anybody hears. */
+static const char * const ONES[] = {
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen"
+};
+static const char * const TENS[] = { "", "", "twenty", "thirty", "forty", "fifty" };
+
+static const char * const WEEKDAYS[] = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
+static const char * const MONTHS[] = {
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+};
+
+static void number_words(int n, char * out, size_t cap)
+{
+    if (n < 20) snprintf(out, cap, "%s", ONES[n]);
+    else if (n % 10 == 0) snprintf(out, cap, "%s", TENS[n / 10]);
+    else snprintf(out, cap, "%s-%s", TENS[n / 10], ONES[n % 10]);
+}
+
+/* Which part of the day it is, in English words. This is what a twelve-hour
+ * clock was doing before it turned midnight into "zwölfsieben Uhr": it tells
+ * the brain whether to say "abends" without asking it to do arithmetic. */
+static const char * day_part(int hour)
+{
+    if (hour < 5) return "at night";
+    if (hour < 12) return "in the morning";
+    if (hour < 18) return "in the afternoon";
+    if (hour < 22) return "in the evening";
+    return "at night";
+}
+
+/* The clock, as the sentence that ends the system prompt.
+ *
+ * It reads the same time() and localtime_r() ui.c draws the face from, which
+ * is what makes the spoken answer and the digits agree: one clock, read
+ * twice. On the device that clock is SNTP's if there is WiFi and the boot
+ * counter if there is not, and neither this file nor the brain can tell the
+ * difference — the watch says what it believes, the same as the face does. */
+static void clock_sentence(char * out, size_t cap)
 {
     time_t now = time(NULL);
     struct tm local;
+    char hour_words[24], minute_words[24];
 
     localtime_r(&now, &local);
-    snprintf(out, cap, "%02d:%02d", local.tm_hour, local.tm_min);
+    number_words(local.tm_hour, hour_words, sizeof hour_words);
+    number_words(local.tm_min, minute_words, sizeof minute_words);
+
+    /* "one minutes" is the kind of thing a model copies rather than corrects,
+     * and what it copies it reads aloud. */
+    snprintf(out, cap, "%02d:%02d — %s hour%s and %s minute%s, %s — on %s, %d %s %d",
+             local.tm_hour, local.tm_min,
+             hour_words, local.tm_hour == 1 ? "" : "s",
+             minute_words, local.tm_min == 1 ? "" : "s",
+             day_part(local.tm_hour), WEEKDAYS[local.tm_wday % 7],
+             local.tm_mday, MONTHS[local.tm_mon % 12], local.tm_year + 1900);
 }
 
-/* ISO, with the weekday spelled out beside it. The date alone would do, and
- * the day it falls on is exactly the arithmetic models get wrong; tm_wday is
- * already sitting there, so handing it over costs a table and removes a class
- * of confidently wrong answers. English because that is the language of a
- * machine-readable date — the system prompt is what turns it back into the
- * one the question was asked in. */
-static void tool_date(char * out, size_t cap)
-{
-    static const char * const WEEKDAYS[] = {
-        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
-    };
-    time_t now = time(NULL);
-    struct tm local;
-
-    localtime_r(&now, &local);
-    snprintf(out, cap, "%04d-%02d-%02d (%s)", local.tm_year + 1900,
-             local.tm_mon + 1, local.tm_mday, WEEKDAYS[local.tm_wday % 7]);
-}
-
-/* The description is not documentation, it is the whole of what makes a model
- * reach for the tool instead of guessing, so each one ends by saying there is
- * no other way to know. That last clause is doing more work than the rest of
- * the sentence. */
+/* The tools the brain may reach for, and there are none.
+ *
+ * The clock was the first two and it is not a tool any more: the same reading
+ * costs a whole second request as a tool and nothing at all in the prompt,
+ * and it measured no more accurate for the money — see VOICE_SYSTEM_FMT in
+ * turn.h for the twelve-readings-each comparison that settled it. Worse, the
+ * declarations are not free to carry: the same question with these two
+ * offered and unused answered in 5.2 s where an identical prompt without them
+ * answered in 2.2 s, which is three seconds off *every* turn to hold a door
+ * open that nothing walks through.
+ *
+ * What stays is the machinery, because what makes the clock a bad tool is
+ * exactly what would make a good one. The clock is a fact the watch always
+ * has, so it costs nothing to say every time and belongs in the prompt.
+ * A tool earns its request by being something the brain cannot be told in
+ * advance — an alarm to set, a timer to start, a thing to look up. The rule
+ * is facts in the prompt, actions through here, and the day there is an
+ * action this is what it plugs into.
+ *
+ * An empty table sends no `tools` field at all, so nothing dormant here is on
+ * the wire or in the three seconds. */
 static const struct {
     const char * name;
     const char * description;
     void (*run)(char * out, size_t cap);
-} TOOLS[] = {
-    { "get_time",
-      "The time right now, from the watch's own clock, as HH:MM on a 24-hour "
-      "clock in the wearer's local timezone. Call this whenever you are asked "
-      "what time it is or how long until something; you have no other way to "
-      "know, and a guess would be wrong.",
-      tool_time },
-    { "get_date",
-      "Today's date, from the watch's own clock, as YYYY-MM-DD with the "
-      "weekday in brackets, in the wearer's local timezone. Call this "
-      "whenever you are asked the date, the day of the week, or anything "
-      "counted from today; you have no other way to know, and a guess would "
-      "be wrong.",
-      tool_date },
-};
+} * const TOOLS = NULL;
 
-#define TOOL_N (sizeof TOOLS / sizeof TOOLS[0])
+/* The loops below count with != rather than <, which reads oddly until the
+ * table is empty: `i < TOOL_N` is then `unsigned < 0`, which GCC warns about
+ * on the device and clang says nothing about on the host. A portable file
+ * that warns on one of its two toolchains is a file someone stops reading the
+ * warnings of. */
+
+#define TOOL_N 0
 
 const char * voice_tool_list(char * out, size_t cap)
 {
     size_t i, at = 0;
 
     if (cap > 0) out[0] = '\0';
-    for (i = 0; i < TOOL_N && at + 1 < cap; i++) {
+    for (i = 0; i != TOOL_N && at + 1 < cap; i++) {
         int wrote = snprintf(out + at, cap - at, "%s%s",
                              at > 0 ? ", " : "", TOOLS[i].name);
         if (wrote < 0 || (size_t) wrote >= cap - at) break;
@@ -934,8 +1070,9 @@ static bool tools_declare(voice_buf_t * body)
 {
     size_t i;
 
+    if (TOOL_N == 0) return true;
     if (!voice_buf_str(body, ",\"tools\":[")) return false;
-    for (i = 0; i < TOOL_N; i++) {
+    for (i = 0; i != TOOL_N; i++) {
         if (i > 0 && !voice_buf_str(body, ",")) return false;
         if (!voice_buf_str(body, "{\"type\":\"function\",\"function\":{\"name\":") ||
             !json_quote(body, TOOLS[i].name) ||
@@ -951,7 +1088,7 @@ static void tool_run(const char * name, char * out, size_t cap)
 {
     size_t i;
 
-    for (i = 0; i < TOOL_N; i++) {
+    for (i = 0; i != TOOL_N; i++) {
         /* strncmp over the field's own size is an equality test here, both
          * strings being shorter than it — and strcmp would be a thirteenth
          * undefined symbol in a file whose list is checked. */
@@ -1027,9 +1164,10 @@ static void log_add(char * ran, size_t cap, size_t * at, const char * name,
 
 bool voice_chat_start(voice_chat_t * chat, const char * heard)
 {
-    /* A platform that never named the assistant still gets a prompt with the
-     * default name in it, rather than an empty system message. */
-    if (system_prompt[0] == '\0') voice_name_set(NULL);
+    /* Rebuilt every turn, for the clock at the end of it. It also covers a
+     * platform that never named the assistant: the prompt comes out with the
+     * default name in it rather than empty. */
+    system_build();
 
     chat->rounds = 0;
     return voice_buf_str(&chat->messages, "{\"role\":\"system\",\"content\":") &&
