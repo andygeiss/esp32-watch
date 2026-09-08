@@ -1073,34 +1073,43 @@ is measured. A turn here is a wake-less turn — transcribe, think, speak — an
 it leaves out the waiting, which is the one part of a real turn that is not
 the server's fault.
 
-Against `https://omlx.ai-at-home.de` with `Qwen3.8-27B-oQ4e-mtp`, three runs:
+Against `https://omlx.ai-at-home.de` with `Qwen3.8-27B-oQ4e-mtp`, medians,
+before and after the clock came out of the tools:
 
     run          stt        brain          tts        turn
     ----------------------------------------------------------
-      1        558 ms      5376 ms      3442 ms      9376 ms
-      2        251 ms      5592 ms      3597 ms      9440 ms
-      3        232 ms      5593 ms      3688 ms      9514 ms
-    ----------------------------------------------------------
-    med        251 ms      5592 ms      3597 ms      9440 ms
+    before      251 ms      5592 ms      3597 ms      9440 ms
+    after       326 ms      3098 ms      4750 ms      7891 ms
 
-    spoke   5.3 s of audio in 3.6 s, 0.68x real time
+    spoke   6.7 s of audio in 4.7 s, 0.70x real time
 
-Three things that table says, and the third is the useful one:
+The `tts` column moved because the reply did — 96 characters against 85, at
+the measured 37 ms each. It is also the noisiest thing here: five runs of the
+same question spread from 2.0 s to 8.2 s on a server somebody else is also
+using, so read the median and re-run before believing a single row.
 
-- **Transcription is not the problem.** A quarter of a second for five seconds
-  of speech, and the first run's 558 ms is the TLS handshake being paid once.
-- **The brain is 59% of the turn**, which is where to look first and the
-  reason the model name is configuration. That reading is from before the
-  clock moved into the prompt; the same brain answered in **2.1 s** once its
-  two tool declarations came out, which is where most of a clock question's
-  cost went.
-- **Synthesis runs at 0.68x real time**, and that is the argument for the
-  chunker written as a number. The server produces speech faster than the
-  speech takes to say, so a reply cut at its first sentence seam could start
-  playing while the rest is still being made — turning the 3.6 s of TTS into
-  roughly the length of the first sentence. `internal/domain/speech.go` in the
-  Go orchestrator is that chunker and is still not translated. Against a
-  factor above 1.0 it would buy nothing; at 0.68 it buys most of the wait.
+Three things that table says:
+
+- **Transcription is not the problem.** A third of a second for five seconds
+  of speech, and a first run's extra 300 ms is the TLS handshake paid once.
+- **The brain lost 2.5 s and never answered a question differently**, which
+  is the whole of what taking two unused tool declarations out of every
+  request bought. It is still the largest single piece.
+- **Synthesis runs at 0.70x real time**, and that is the chunker's premise
+  written as a number: the server makes speech faster than the speech takes to
+  say, so a piece can play while the next is still being made. Above 1.0 the
+  chunker would buy nothing.
+
+**A clock question is where the two levers land together.** Asked *Wie spät
+ist es?* at 15:12, through the real request the binary builds:
+
+    2229 ms  Es ist drei Uhr zwölf am Nachmittag.
+    2262 ms  Es ist fünfzehn Uhr zwölf.
+    3464 ms  Es ist drei Uhr zwölf nachmittags.
+
+Three for three, and about 2.3 s where the same question through `get_time`
+was two requests and about 10 s. With the rest of the turn around it, that is
+roughly **14 s down to 7 s** for the question a watch exists to answer.
 
 `BRAIN=echo` is the floor and worth knowing: **4.6 s** with the brain at zero,
 against **9.7 s** with it. That is the size of the prize — a faster brain can
