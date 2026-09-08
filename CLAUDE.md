@@ -102,7 +102,8 @@ in the same bag and say nothing.
   both implement. Both builds compile `turn.c` unchanged.
 - **`host/` — host only.** `main.c` for the SDL window, input devices, tick
   source and service loop; `voice.c` for the SDL microphone, the socket and
-  the SDL speaker; `test_ui.c` for the headless renderer.
+  the SDL speaker; `test_ui.c` for the headless renderer, and `demo.c` for the
+  one that draws the README's animation.
 - **`firmware/main/` — device only.** The same jobs against the panel and the
   board's own codecs, plus the clock the board cannot read for itself, split
   over `main.c`, `board.c`, `net.c` and `voice.c`. It replaces `host/main.c`
@@ -230,9 +231,11 @@ Each of these was a real failure or a real warning, not a preference:
 - SDL2 is found with `pkg_check_modules(... IMPORTED_TARGET sdl2)` rather than
   `find_package(SDL2)`; pkg-config follows the Homebrew arm64 prefix with no
   hand-written hint paths.
-- The portable half is its own target, `kai_ui`. Two hosts link it — `kai_sim`
-  with its SDL window, `kai_test` with a byte array — which is the host/device
-  boundary above, put where the build can hold it up.
+- The portable half is its own target, `kai_ui`. Three hosts link it —
+  `kai_sim` with its SDL window, `kai_test` with a byte array it asserts about,
+  `kai_demo` with one it hands to a GIF writer — which is the host/device
+  boundary above, put where the build can hold it up. `kai_demo` builds with
+  the rest rather than on demand, so a UI change cannot leave it behind.
 - `CONFIG_LV_BUILD_EXAMPLES`, `CONFIG_LV_BUILD_DEMOS` and
   `CONFIG_LV_USE_THORVG_INTERNAL` are `FORCE`d **cache** entries. LVGL declares
   them with `option()` under `cmake_minimum_required(3.12.4)`, where CMP0077 is
@@ -1001,3 +1004,45 @@ Two things to know before writing another renderer like it:
 
 Amber `0xFFB000` reads back as `#FFB200` after the RGB565 round-trip — that is
 correct, not a bug, and the test asserts exactly that value.
+
+## The animation in README.md
+
+`docs/watch.gif` is the picture at the top of the README, and it is the second
+renderer written the way the section above describes. `host/demo.c` is the
+third host: the same fake tick source and the same `LV_DISPLAY_RENDER_MODE_FULL`
+buffer as `test_ui.c`, driving the real `ui.c` through a whole turn —
+`ui_view_set()` and `ui_status_set()` in the order `host/main.c`'s two timers
+would make them. `tools/gen_demo.py` builds it, runs it, and writes the GIF:
+
+    tools/gen_demo.py
+
+**The point of generating it is that it cannot go stale.** A screenshot pasted
+into a README is a claim about code that has since changed; this one is the
+code, and `kai_demo` links the same `kai_ui` the simulator and the test do, so
+it stops compiling the moment they would. It builds with everything else for
+that reason rather than on demand.
+
+Four things about it are deliberate:
+
+- **`lv_timer_handler()` and nothing else per frame.** `lv_refr_now()` steps
+  the animations as well as drawing them — the same fact `test_ui.c`'s
+  mid-blink check has to work around — so calling both would run the clock at
+  double speed.
+- **A frame identical to the one before it is folded into that one's
+  duration**, in `demo.c`, which is why 11 s of animation is 34 frames and
+  131 kB. Nothing on either face moves except during a morph or a blink; the
+  render mode is FULL, so the buffer is a whole frame even on the refreshes
+  where LVGL redrew only a corner readout.
+- **One palette for the whole GIF, and every colour kept.** Amber on black
+  comes to 91 colours after the RGB565 round-trip, well inside the 256 a GIF
+  palette holds, so nothing is quantised away and no frame carries a palette
+  of its own.
+- **`MAX_HOLD_MS` caps how long a still frame is held.** The watch really does
+  wait 3.6 s between blinks and the renderer really does wait it out, but a
+  loop that spends 3.6 s of every pass on a still frame is one nobody watches
+  to the end of. It is the one number in there that is about the README rather
+  than about the watch.
+
+Pillow is what `gen_demo.py` needs, the way `gen_fonts.py` needs node. Neither
+is part of `check`: that gate has to stay runnable on a Mac with nothing on it
+but Homebrew.

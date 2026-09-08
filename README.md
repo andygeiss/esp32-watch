@@ -11,24 +11,11 @@ make firmware   # the board, with ESP-IDF exported into the shell
 make flash      # onto the board, then its log
 ```
 
-```
-+---------------------+       +---------------------+
-| wifi        62% [#] |       | wifi        62% [#] |
-|                     |       |                     |
-|                     |       |                     |
-|   ## ##     ## ##   |       |      .-.     .-.    |
-|   ## ##     ## ##   |  -->  |     ( o )   ( o )   |
-|   ## ##     ## ##   |       |      `-'     `-'    |
-|                     |       |                     |
-|        09/06        |       |                     |
-|         SUN         |       |                     |
-|                     |       |                     |
-|                     |       |                     |
-| spk             mic |       | spk             mic |
-+---------------------+       +---------------------+
-        "Hey Kai"  ------------->
-        <-------------  "Tschüss", or 30 s of quiet
-```
+![The clock face morphing into the assistant's two eyes, blinking, and back](docs/watch.gif)
+
+*The simulator, at the panel's own 410 x 502 and its own speed. Rendered from
+the `ui.c` the firmware compiles, by `tools/gen_demo.py`, so it cannot drift
+from what the watch does.*
 
 Amber on black, the way a VFD readout looks. Say `Hey Kai` and each digit group
 pulls in to an eye over 400 ms while the digits fade off the front of it — a
@@ -162,8 +149,8 @@ written down in `voice/turn.h` — `Qwen3.8-27B-oQ4e-mtp` for the brain, so the
 watch thinks unless `WATCH_BRAIN_MODEL=echo` tells it to say the question back
 instead. `make` on its
 own is `make check`: the `lv_conf.h` liveness grep, the build, the boundary
-check, and 83 assertions rendered into a byte array by `test_ui.c` — geometry,
-opacity, label text and the pixels themselves, with no window and no
+check, and 108 assertions rendered into a byte array by `test_ui.c` —
+geometry, opacity, label text and the pixels themselves, with no window and no
 screenshot. `make ci` runs the lot against the commit.
 
 ### The firmware
@@ -204,6 +191,7 @@ with nothing on it but Homebrew.
 | `host/main.c`, `CMakeLists.txt` | the simulator |
 | `host/voice.c` | its voice loop: SDL microphone, a hand-written request over a socket or OpenSSL, SDL speaker |
 | `host/test_ui.c` | the headless renderer that `make test` runs |
+| `host/demo.c`, `tools/gen_demo.py` | the animation at the top of this file, rendered off the same `ui.c` |
 | `lv_conf.h` | one LVGL configuration for both targets |
 | `firmware/` | the ESP-IDF project |
 

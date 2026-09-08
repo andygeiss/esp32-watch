@@ -41,10 +41,10 @@ add_subdirectory(lvgl)
 target_link_libraries(lvgl PUBLIC PkgConfig::SDL2)
 
 # The portable half as its own target, which is the host/device boundary from
-# CLAUDE.md written into the build: two hosts link it here — the SDL window and
-# the headless test — and the firmware builds the same sources unchanged. The
-# directories say the same thing the targets do: ui/ compiles on both sides,
-# host/ only here.
+# CLAUDE.md written into the build: three hosts link it here — the SDL window,
+# the headless test and the demo renderer — and the firmware builds the same
+# sources unchanged. The directories say the same thing the targets do: ui/
+# compiles on both sides, host/ only here.
 add_library(kai_ui STATIC
     ui/ui.c
     ui/ui_font_digits_118.c  # generated, see tools/gen_fonts.py
@@ -79,3 +79,10 @@ target_link_libraries(kai_sim PRIVATE kai_ui kai_turn PkgConfig::SDL2 PkgConfig:
 # Renders the UI into a byte array and checks what came out. `make test`.
 add_executable(kai_test host/test_ui.c)
 target_link_libraries(kai_test PRIVATE kai_ui PkgConfig::SDL2)
+
+# Renders the same two faces into frames for the README's animation, which
+# tools/gen_demo.py turns into a GIF. Built with everything else rather than
+# on demand so that a UI change cannot leave it behind: it links the same
+# kai_ui the other two do, so it stops compiling the moment they would.
+add_executable(kai_demo host/demo.c)
+target_link_libraries(kai_demo PRIVATE kai_ui PkgConfig::SDL2)
