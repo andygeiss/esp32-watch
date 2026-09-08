@@ -76,9 +76,11 @@ menu "ESP32 Watch"
         default ""
         help
             What the assistant thinks with. Empty means the default in
-            voice/turn.h, which is Qwen3.8-27B-oQ4e-mtp — the model this
-            watch was built against. Fill it in to name a different one the
-            server hosts.
+            voice/turn.h, which is Jundot/gemma-4-E2B-it-oQ4e-mtp — the small
+            model the watch answers with. Fill it in to name a different one
+            the server hosts; Jundot/Qwen3.8-27B-oQ4e-mtp is the large model
+            this watch was built against, about a second and a half slower
+            per turn and markedly better at saying a time out loud.
 
             Write "echo" and there is no chat request at all: the answer is
             the question said back, word for word. It needs no third service
