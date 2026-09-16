@@ -2,7 +2,7 @@
  * @file net.c
  * WiFi, and the time that comes with it.
  *
- * This board has no RTC, so time(NULL) in ui.c counts from the instant the
+ * The RTC on this board is not read yet, so time(NULL) in ui.c counts from the instant the
  * chip came out of reset until something tells it otherwise. SNTP over WiFi
  * is the only thing on this board that can.
  *

@@ -169,8 +169,8 @@ WiFi, SNTP and the assistant are off until you configure them, and the
 configuration is `.env` — the same file the simulator reads, plus
 `WATCH_WLAN_SSID` and `WATCH_WLAN_PASS` for the network — which `make
 firmware` and `make flash` compile into the image. Only the SNTP server and
-the timezone are `idf.py -C firmware menuconfig`, under **ESP32 Watch**. The board has no RTC, so without an SSID the clock counts
-from reset and the WiFi corner draws dim, which is the reading that dimming
+the timezone are `idf.py -C firmware menuconfig`, under **ESP32 Watch**. The firmware does not read the board's RTC yet, so without an SSID the clock
+counts from reset and the WiFi corner draws dim, which is the reading that dimming
 is for. The assistant needs that SSID, a speech server URL it can reach, and
 `voices/female.wav` in the tree when the firmware is built; without any one
 of them the watch is a clock. `WATCH_VOICE_URL`

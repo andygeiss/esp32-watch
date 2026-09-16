@@ -382,21 +382,47 @@ The same `ui_status_t` the simulator fakes, filled from what is actually there:
 | | |
 |---|---|
 | `wifi_up` | real, from the station's `IP_EVENT_STA_GOT_IP` |
-| `battery_pct` | `-1`. There is no fuel gauge on this board, and the UI already draws `--%` for a charge it does not know — the honest reading, not an invented one |
+| `battery_pct`, `charging` | real, from the AXP2101's own fuel gauge — see the power section below. `-1` when no gauge or no battery answers, which the UI already draws as `--%` |
 | `listening`, `speaking` | real, from `voice.c` — the ES7210 in front of the microphones and the ES8311 in front of the speaker |
 
-The charge is the only invented one left, and it is one line in
-`status_tick()` when a gauge arrives. None of it reaches into `ui.c`. That is
-the point of the struct.
+Nothing is invented any more. None of it reaches into `ui.c`. That is the
+point of the struct.
 
 **The assistant's face comes from the same place.** `view_tick()` polls
 `voice_awake()` into `ui_view_set()` ten times a second, exactly as the
 simulator's does — see the voice loop below.
 
+### The power
+
+An AXP2101 power management chip sits on the same I2C bus as the touch
+controller and the codecs, at 0x34. It charges the LiPo on the MX1.25
+connector, measures it with its own ADC and runs a coulomb-counting gauge
+that answers in percent. `board_battery_init()` finds it by its chip ID and
+switches the voltage ADC on; `board_battery_read()` is three bytes once a
+second from `status_tick()` — battery present, charger state, percentage —
+and no library, because a driver for the whole chip is a page of regulators
+this board has already set itself up with by the time `app_main` runs. The
+register numbers are the chip's own, checked against how XPowersLib uses
+them.
+
+Two things to know about the number. The gauge's percentage is only as good
+as its battery model, which is the chip's default: on the first run it said
+100% at 4109 mV, which a resting LiPo would call about ninety, so read the
+voltage the start-up line prints beside it before trusting a full reading.
+And the corner's charging bolt means the charger is putting charge in, so a
+full battery on USB reads 100% without it — `charge done, on USB` in the log.
+
+The same bus holds two more chips this firmware does not use yet, both found
+by probing: a PCF85063 real-time clock at 0x51, powered from the battery
+through the AXP2101, and a QMI8658 motion sensor at 0x6B. The clock is the
+next one worth wiring, for the reason the section below explains.
+
 ### The clock
 
-The board has no RTC, so `time(NULL)` counts from reset until something tells
-it otherwise, and SNTP over WiFi is the only thing on this board that can.
+The firmware does not read a real-time clock yet, so `time(NULL)` counts from
+reset until something tells it otherwise, and SNTP over WiFi is the only thing
+here that does. The board does have one — the PCF85063 above — and reading it
+at boot would give the watch the time without a network.
 Both are off by default. The network is `WATCH_WLAN_SSID` and
 `WATCH_WLAN_PASS` in `.env`, which `make firmware` and `make flash` source
 and hand to CMake as `-D` variables; `firmware/main/CMakeLists.txt` turns them

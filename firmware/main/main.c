@@ -36,25 +36,27 @@ static uint32_t tick_ms(void)
     return (uint32_t) (esp_timer_get_time() / 1000);
 }
 
-/* What this board can answer, and what it cannot.
+/* What this board can answer: all of it, now.
  *
- * The radio is real, and so are the microphone and the speaker now that
- * voice.c has the ES7210 and the ES8311. The charge is not: there is no fuel
- * gauge on this board, so battery_pct stays negative and the corner reads
- * `--%` — the honest answer, and one the UI already draws. That last one is a
- * single line here when a gauge arrives, and none of it reaches into ui.c.
- * That is the point of the struct. */
+ * The radio is real, the microphone and the speaker are voice.c's ES7210 and
+ * ES8311, and the charge is the AXP2101's own gauge — read once a second,
+ * three bytes over I2C. With no gauge found, or no battery on it, the reading
+ * stays negative and the corner reads `--%`, which is the honest answer and
+ * one the UI already draws. None of it reaches into ui.c. That is the point
+ * of the struct. */
 static void status_tick(lv_timer_t * timer)
 {
+    bool charging;
     ui_status_t status = {
-        .battery_pct = -1,
-        .charging    = false,
-        .wifi_up     = net_is_up(),
-        .listening   = voice_listening(),
-        .speaking    = voice_speaking(),
+        .wifi_up   = net_is_up(),
+        .listening = voice_listening(),
+        .speaking  = voice_speaking(),
     };
 
     LV_UNUSED(timer);
+
+    status.battery_pct = board_battery_read(&charging);
+    status.charging = charging;
 
     ui_status_set(&status);
 }
@@ -76,6 +78,7 @@ void app_main(void)
 
     lv_display_t * display = board_display_init();
     board_touch_init(display);
+    board_battery_init(); /* on the bus the touch just made */
 
     ui_build();
     lv_timer_ready(lv_timer_create(status_tick, STATUS_PERIOD_MS, NULL));

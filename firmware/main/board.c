@@ -461,3 +461,91 @@ void board_speaker_close(void)
     if (speaker != NULL && speaker_open) esp_codec_dev_close(speaker);
     speaker_open = false;
 }
+
+/* ------------------------------------------------------------------ */
+/* Power. The AXP2101 at 0x34: it charges the LiPo, measures it, and keeps a  */
+/* coulomb-counting gauge that answers in percent. Five registers, read by    */
+/* hand — a driver for the whole chip would be a page of regulators this      */
+/* board has already set up for itself by the time this code runs. The       */
+/* numbers are from the chip's own map, checked against XPowersLib's use of  */
+/* them, and they describe one chip on one board.                            */
+/* ------------------------------------------------------------------ */
+
+#define AXP2101_ADDR        0x34
+#define AXP2101_STATUS1     0x00  /* bit 3: a battery is connected; bit 5: VBUS good */
+#define AXP2101_STATUS2     0x01  /* bits 7:5: 1 charging, 2 discharging; bits 2:0: 4 charge done */
+#define AXP2101_IC_TYPE     0x03  /* reads 0x4A on an AXP2101 */
+#define AXP2101_ADC_ENABLE  0x30  /* bit 0: measure the battery voltage */
+#define AXP2101_VBAT_H      0x34  /* 5 bits, then the byte after it, in mV */
+#define AXP2101_BAT_PERCENT 0xA4
+#define AXP2101_ID          0x4A
+
+static i2c_master_dev_handle_t pmu;
+
+static bool pmu_read(uint8_t reg, uint8_t * out, size_t n)
+{
+    return i2c_master_transmit_receive(pmu, &reg, 1, out, n, 50) == ESP_OK;
+}
+
+static bool pmu_write(uint8_t reg, uint8_t value)
+{
+    uint8_t frame[2] = { reg, value };
+    return i2c_master_transmit(pmu, frame, sizeof frame, 50) == ESP_OK;
+}
+
+bool board_battery_init(void)
+{
+    const i2c_device_config_t dev = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = AXP2101_ADDR,
+        .scl_speed_hz = 100000,
+    };
+    uint8_t id = 0, adc = 0, mv[2] = { 0, 0 }, status1 = 0, status2 = 0;
+    bool charging;
+    int pct;
+
+    if (i2c == NULL) {
+        ESP_LOGE(TAG, "the gauge needs the I2C bus board_touch_init() makes");
+        return false;
+    }
+    if (i2c_master_bus_add_device(i2c, &dev, &pmu) != ESP_OK) return false;
+
+    if (!pmu_read(AXP2101_IC_TYPE, &id, 1) || id != AXP2101_ID) {
+        ESP_LOGW(TAG, "no AXP2101 at 0x%02X (id 0x%02X) — the charge stays unknown",
+                 AXP2101_ADDR, id);
+        i2c_master_bus_rm_device(pmu);
+        pmu = NULL;
+        return false;
+    }
+
+    /* The voltage ADC is off at reset. Only the one bit changes: the rest of
+     * the register is what the chip already chose for itself. */
+    if (pmu_read(AXP2101_ADC_ENABLE, &adc, 1)) pmu_write(AXP2101_ADC_ENABLE, adc | 0x01);
+
+    pct = board_battery_read(&charging);
+    pmu_read(AXP2101_VBAT_H, mv, 2);
+    pmu_read(AXP2101_STATUS1, &status1, 1);
+    pmu_read(AXP2101_STATUS2, &status2, 1);
+    ESP_LOGI(TAG, "gauge up: %d%%, %u mV, %s", pct,
+             ((mv[0] & 0x1F) << 8) | mv[1],
+             pct < 0                ? "no battery"
+             : charging             ? "charging"
+             : (status2 & 0x07) == 4 ? "charge done, on USB"
+             : (status1 & 0x20)     ? "on USB, not charging"
+                                    : "on the battery");
+    return true;
+}
+
+int board_battery_read(bool * charging)
+{
+    uint8_t status1 = 0, status2 = 0, pct = 0;
+
+    *charging = false;
+    if (pmu == NULL) return -1;
+    if (!pmu_read(AXP2101_STATUS1, &status1, 1) || !(status1 & 0x08)) return -1;
+    if (!pmu_read(AXP2101_STATUS2, &status2, 1)) return -1;
+    if (!pmu_read(AXP2101_BAT_PERCENT, &pct, 1)) return -1;
+
+    *charging = (status2 >> 5) == 1;
+    return pct > 100 ? 100 : pct;
+}
