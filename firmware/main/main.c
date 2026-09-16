@@ -60,23 +60,23 @@ static void clock_from_rtc(void)
 }
 
 /* Raise to wake. The panel is lit for WAKE_HOLD_MS after a tap, or after the
- * watch moves and is then held face up — the two things a wrist does on its
- * way to being read — and goes dark otherwise. "Face up" is the panel's
- * normal within WAKE_FACE_G of straight up; "moves" is the acceleration
- * vector changing by WAKE_MOVE_G between two samples a tenth of a second
- * apart, which a watch on a desk never does and a lifted wrist always does.
- * Nothing under ui.h knows: rendering carries on, so the panel lights on the
- * present frame.
+ * watch moves — the acceleration vector changing by WAKE_MOVE_G between two
+ * samples a tenth of a second apart, which a watch on a desk never does and
+ * a lifted wrist always does — and goes dark after that, or at once when the
+ * glass is turned toward the ground. Nothing under ui.h knows: rendering
+ * carries on, so the panel lights on the present frame.
  *
- * The sensor's axes were read off the first run, with the board flat on a
- * desk face up: it read +0.13, +0.18, -1.01, so up is the third axis, and
- * negative — the sensor is mounted with its Z pointing into the wrist. */
+ * There is deliberately no "face up" test. There was one, and it lit the
+ * desk and not the wrist: on this chip a watch lying glass-up reads a full g
+ * on Z, and a watch raised to be read reads about +1.0 on X and +0.2 on Z —
+ * the glass faces the eyes, not the sky. So movement is the whole of the
+ * wake, and orientation is only ever a reason to go dark: WAKE_DOWN_G on Z
+ * is the glass turned over, which the desk reading says is +1. */
 #define WAKE_PERIOD_MS 100
 #define WAKE_HOLD_MS   8000
 #define WAKE_MOVE_G    0.25f
-#define WAKE_FACE_G    0.6f
-#define WAKE_UP_AXIS   2
-#define WAKE_UP_SIGN   -1.0f
+#define WAKE_DOWN_G    0.6f
+#define WAKE_DOWN_AXIS 2
 
 static void wake_tick(lv_timer_t * timer)
 {
@@ -86,7 +86,7 @@ static void wake_tick(lv_timer_t * timer)
     static bool     lit = true;
     float g[3];
     uint32_t now = tick_ms();
-    bool moved = false, face_up = true;
+    bool moved = false, face_down = false;
 
     LV_UNUSED(timer);
 
@@ -97,11 +97,11 @@ static void wake_tick(lv_timer_t * timer)
         }
         memcpy(last, g, sizeof last);
         have_last = true;
-        face_up = g[WAKE_UP_AXIS] * WAKE_UP_SIGN > WAKE_FACE_G;
+        face_down = g[WAKE_DOWN_AXIS] > WAKE_DOWN_G;
     }
 
-    if (board_touch_take_tap() || (moved && face_up)) lit_until = now + WAKE_HOLD_MS;
-    if (!face_up) lit_until = 0;
+    if (board_touch_take_tap() || moved) lit_until = now + WAKE_HOLD_MS;
+    if (face_down) lit_until = 0;
 
     if (((int32_t) (lit_until - now) > 0) != lit) {
         lit = !lit;

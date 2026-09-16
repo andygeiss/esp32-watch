@@ -439,45 +439,30 @@ The panel is lit when someone wants to read it and dark otherwise, and the
 QMI8658's accelerometer is what says which. `wake_tick()` in `main.c` reads
 the acceleration vector ten times a second. Two things light the panel for
 eight seconds: a tap on the glass, which the touch controller's interrupt
-already reports as a flag, and the watch *moving* and then being *face up* —
-the vector changing by more than a quarter g between two samples, with the
-panel's normal within 0.6 g of straight up. A watch on a desk never moves; a
-lifted wrist always does; and face down goes dark at once. The boot face is
-held eight seconds too, so a watch that has just started can be looked at.
+already reports as a flag, and the watch *moving* — the vector changing by
+more than a quarter g between two samples. A watch on a desk never moves; a
+lifted wrist always does. The glass turned toward the ground goes dark at
+once, and the boot face is held eight seconds, so a watch that has just
+started can be looked at.
+
+**There is deliberately no "face up" test, and it took a wrist to find out.**
+The first rule wanted the watch face up as well as moved, and it lit the
+desk and not the wrist: on this chip a watch lying glass-up reads a full g
+on Z, and a watch raised to be read reads about +1.0 on X and +0.2 on Z,
+because the glass faces the eyes and not the sky. Two flashes went by
+guessing the sign of that test before a log of the raw vector, taken while
+the watch was actually being read, showed there was no sign that worked.
+So movement is the whole of the wake, and orientation is only ever a reason
+to go dark. The log says `panel lit` and `panel dark` on every change, which
+is how the thresholds get tuned against a real wrist.
 
 Only the accelerometer runs, at ±2 g and 125 Hz. The gyroscope would cost
-ten times the current to answer the same question. Which axis is up was
-read off the first run rather than assumed: flat and face up the sensor
-reports +0.13, +0.18, −1.01, so up is the third axis and negative — the chip
-is mounted with its Z pointing into the wrist, and `WAKE_UP_SIGN` says so.
-Guess it and the panel is dark exactly when the watch is being read, which
-is what the first flash did.
-
-Dark is `esp_lcd_panel_disp_on_off(panel, false)`, the panel's own display-off
+ten times the current to answer the same question. Dark is
+`esp_lcd_panel_disp_on_off(panel, false)`, the panel's own display-off
 command; LVGL carries on rendering underneath, so the panel lights on the
 present frame rather than the one it went dark on. Nothing under `ui.h`
 knows any of this: when the panel is lit is a fact about the platform, the
 same as the charge and the radio, and it stays on this side of the boundary.
-The log says `panel lit` and `panel dark` on every change, which is how the
-thresholds get tuned against a real wrist.
-Both are off by default. The network is `WATCH_WLAN_SSID` and
-`WATCH_WLAN_PASS` in `.env`, which `make firmware` and `make flash` source
-and hand to CMake as `-D` variables; `firmware/main/CMakeLists.txt` turns them
-into two string macros `net.c` reads. An empty SSID keeps the radio down, the
-watch runs off its boot clock, and the WiFi corner draws dim — which is the
-reading that dimming is for. They are in `.env` rather than menuconfig
-because the password is a secret and `.env` is where this repository keeps
-those on both builds. The voice settings take the same road, so the whole of
-`.env` is the device's configuration too; what is left under
-`idf.py -C firmware menuconfig`, **ESP32 Watch**, is the SNTP server and the
-timezone, which `.env` has no line for. The timezone is compiled in there
-because the device has no locale to turn UTC into local time with.
-
-The `-D` route rather than `$ENV{}` in CMake is deliberate: idf.py reruns the
-configure step when a `-D` value differs from the cached one, so a change to
-`.env` is picked up by the next `make firmware`, where a change to the
-environment alone is not. Both are passed even when empty, because an empty
-one is what takes a network back out of the image.
 
 ## The fonts
 
