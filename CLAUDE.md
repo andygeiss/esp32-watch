@@ -443,7 +443,10 @@ already reports as a flag, and the watch *moving* — the vector changing by
 more than a quarter g between two samples. A watch on a desk never moves; a
 lifted wrist always does. The glass turned toward the ground goes dark at
 once, and the boot face is held eight seconds, so a watch that has just
-started can be looked at.
+started can be looked at. A conversation keeps the panel lit — the eyes stay
+up until the goodbye, and eight seconds after — and the microphone follows
+the panel, which is the whole of the device's power story; see the voice
+loop.
 
 **There is deliberately no "face up" test, and it took a wrist to find out.**
 The first rule wanted the watch face up as well as moved, and it lit the
@@ -847,9 +850,20 @@ that pair that had to exist first — a stream with nothing to cut it at is only
 a second parser for the same text.
 
 **The transcriber is the wake-word engine.** There is no button and no
-wake-word model, so the microphone is open from start-up, every utterance in
-the room is recorded and transcribed, and the watch wakes when its own name
-comes back in the text. `WAKE` in `voice/turn.c` is a table rather than one
+wake-word model, so while the microphone is open every utterance in the room
+is recorded and transcribed, and the watch wakes when its own name comes
+back in the text. On the host that is from start-up. **On the device the
+microphone follows the panel**: it is open while the panel is lit — a raised
+wrist or a tapped glass, see *Raise to wake* — or while a conversation is
+on, which keeps the panel lit itself, and closed otherwise. Dark and asleep,
+nothing is recorded and nothing goes on the wire. The alternative was every
+sentence said in the room, sent to the transcriber around the clock, which
+is where the battery went and where the room's conversations went too. A
+wrist that comes down before a word is said ends the wait rather than
+leaving a recording open on a dark watch. The radio stays associated
+through all of it, in modem sleep between beacons, because a fresh
+association costs four seconds on a raised wrist and every request is one
+the watch starts. `WAKE` in `voice/turn.c` is a table rather than one
 string because Parakeet has never been shown that name and spells it a few
 different ways; it is the greeting that is matched, not the name alone, or
 *Kaiser* and half the German news would wake the watch. Whatever follows the
@@ -911,8 +925,9 @@ Both `main.c` files have exactly these two timers with exactly these two
 periods.
 
 `voice_listening()` is `awake && recording`, not `recording` alone. The
-microphone really is open the whole time, but a corner that is always lit says
-nothing — lit means the next thing said is meant for the assistant.
+microphone is open whenever the watch is being looked at, but a corner that
+is lit every time the wrist comes up says nothing — lit means the next thing
+said is meant for the assistant.
 
 **Nothing interrupts a reply any more.** The button used to, mid-sentence.
 Talking over the assistant means being heard while it is speaking, which needs

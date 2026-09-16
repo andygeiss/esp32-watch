@@ -337,6 +337,8 @@ static size_t record(uint32_t patience_ms)
         size_t got;
 
         if (voice_turn_wait(&turn) == VOICE_NOTHING) break;
+        /* The wrist came down before a word was said: nothing to wait for. */
+        if (!atomic_load(&awake) && !board_display_lit()) break;
         if (voice_turn_dead(&turn)) {
             /* The simulator lists the inputs it can see here, because a Mac
              * has several and picks for you. This board has one, so what is
@@ -512,6 +514,18 @@ static void loop(void * unused)
         if (!net_is_up()) {
             board_mic_close();
             vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        /* Nobody looking, nobody talking to it. The microphone is open only
+         * while the panel is lit — a raised wrist or a tapped glass — or
+         * while a conversation is on, which keeps the panel lit itself. The
+         * alternative was every sentence said in the room, recorded and sent
+         * to the transcriber around the clock, which is where the battery
+         * went and where the room's conversations went too. */
+        if (!atomic_load(&awake) && !board_display_lit()) {
+            board_mic_close();
+            vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
 

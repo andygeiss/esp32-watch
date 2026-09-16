@@ -102,6 +102,9 @@ static void wake_tick(lv_timer_t * timer)
 
     if (board_touch_take_tap() || moved) lit_until = now + WAKE_HOLD_MS;
     if (face_down) lit_until = 0;
+    /* A conversation keeps the panel lit, and with it the microphone: the
+     * eyes stay up until the goodbye, and eight seconds after. */
+    if (voice_awake()) lit_until = now + WAKE_HOLD_MS;
 
     if (((int32_t) (lit_until - now) > 0) != lit) {
         lit = !lit;

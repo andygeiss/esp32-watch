@@ -111,6 +111,11 @@ void net_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Stay associated, but let the radio sleep between beacons. Every
+     * request here is one the watch starts, so nothing waits on the radio
+     * being awake for an incoming packet, and the association is kept for
+     * the four seconds a fresh one costs on a raised wrist. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MAX_MODEM));
 
     /* SNTP starts here and waits for the association by itself, then keeps
      * the clock honest for as long as the watch is up — and hands each

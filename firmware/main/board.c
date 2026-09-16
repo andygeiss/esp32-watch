@@ -191,13 +191,20 @@ lv_display_t * board_display_init(void)
     return display;
 }
 
+/* Written from the LVGL task, read from the voice task; a bool is atomic
+ * enough for a flag that is only ever polled. */
+static volatile bool panel_asleep;
+
 void board_display_sleep(bool asleep)
 {
-    static bool is_asleep;
-
-    if (panel == NULL || asleep == is_asleep) return;
+    if (panel == NULL || asleep == panel_asleep) return;
     esp_lcd_panel_disp_on_off(panel, !asleep);
-    is_asleep = asleep;
+    panel_asleep = asleep;
+}
+
+bool board_display_lit(void)
+{
+    return !panel_asleep;
 }
 
 /* The controller's INT line, as two flags: one the read callback consumes,

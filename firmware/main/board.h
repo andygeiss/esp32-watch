@@ -40,6 +40,10 @@ bool board_touch_take_tap(void);
  * so a lit panel shows the present and not the frame it went dark on. */
 void board_display_sleep(bool asleep);
 
+/** Whether the panel is lit right now — which is to say, whether anyone is
+ * looking. Safe to read from any task. */
+bool board_display_lit(void);
+
 /* ------------------------------------------------------------------ */
 /* The real-time clock and the motion sensor: a PCF85063 and a QMI8658, both */
 /* on the touch controller's I2C bus, so board_touch_init() first here too.  */
