@@ -35,3 +35,11 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # So that the loop's 1 ms floor is 1 ms and not a 10 ms tick.
 CONFIG_FREERTOS_HZ=1000
+
+# esp_codec_dev defaults to the legacy I2C driver, and the touch controller
+# in board.c opens the bus with the new one. ESP-IDF refuses to run both:
+# the legacy driver's start-up constructor aborts with "CONFLICT! driver_ng
+# is not allowed to be used with this old driver", before app_main, and the
+# board boot-loops. Off here, the codecs take the same bus handle the touch
+# controller made, which is what board.c hands them.
+CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n

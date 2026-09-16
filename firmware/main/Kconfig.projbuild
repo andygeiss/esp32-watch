@@ -1,17 +1,8 @@
 menu "ESP32 Watch"
 
-    config WATCH_WIFI_SSID
-        string "WiFi SSID"
-        default ""
-        help
-            Leave this empty and the radio never comes up: the watch runs off
-            its own boot clock and the WiFi corner readout stays dim, which is
-            what that dimming is for. Fill it in and the watch joins the
-            network and asks SNTP what time it is.
-
-    config WATCH_WIFI_PASSWORD
-        string "WiFi password"
-        default ""
+    # The network's name and password are not here. They are WATCH_WLAN_SSID
+    # and WATCH_WLAN_PASS in .env, which `make firmware` compiles in — the
+    # password is a secret, and .env is where this repository keeps those.
 
     config WATCH_SNTP_SERVER
         string "SNTP server"
@@ -43,8 +34,9 @@ menu "ESP32 Watch"
             clock, and the microphone and speaker corners stay dim, which is
             what that dimming is for.
 
-            It needs an SSID above as well. All three services are on the
-            other end of the radio, so no network means no assistant.
+            It needs a WATCH_WLAN_SSID in .env as well. All three services
+            are on the other end of the radio, so no network means no
+            assistant.
 
     config WATCH_VOICE_KEY
         string "Speech server API key"

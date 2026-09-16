@@ -31,3 +31,27 @@ else()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_WATCH_HAS_VOICE=0)
     message(STATUS "WATCH: no voices/female.wav — the assistant will stay asleep")
 endif()
+
+# The network the watch joins, out of .env by way of `make firmware`: the
+# Makefile sources it and passes WATCH_WLAN_SSID and WATCH_WLAN_PASS in as
+# CMake variables, and here they become two string macros net.c reads. They
+# are the host's settings list crossing over to the device the way the
+# server address does, and they are not in Kconfig for the same reason the
+# key is not compiled in on the host — the password is a secret, .env is
+# where this repository keeps those, and a setting that lives in two places
+# is set in one and forgotten in the other.
+#
+# Both macros always exist, empty when nothing was passed, so net.c can test
+# the SSID for '\0' rather than for #ifdef. The two replaces are what make a
+# value with a quote or a backslash in it a valid C string literal.
+foreach(setting WATCH_WLAN_SSID WATCH_WLAN_PASS)
+    set(value "${${setting}}")
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\"" "\\\"" value "${value}")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE "${setting}=\"${value}\"")
+endforeach()
+if(WATCH_WLAN_SSID)
+    message(STATUS "WATCH: the watch will join ${WATCH_WLAN_SSID}")
+else()
+    message(STATUS "WATCH: no WATCH_WLAN_SSID — the radio stays off")
+endif()

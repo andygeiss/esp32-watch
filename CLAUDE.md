@@ -219,7 +219,7 @@ those paths are relative to.
 For the board, with ESP-IDF exported into the shell first:
 
     . ~/esp/esp-idf/export.sh
-    make firmware   # idf.py -C firmware build
+    make firmware   # idf.py -C firmware build, with .env's WLAN lines compiled in
     make flash      # idf.py -C firmware flash monitor
 
 Neither is part of `check`. That gate has to stay runnable on a Mac with
@@ -295,6 +295,15 @@ They share one duplex I2S bus — MCLK 16, BCLK 41, WS 45 — and they share the
 I2C bus the touch controller already sits on, GPIO14/15. Two consequences,
 both load-bearing:
 
+- **`esp_codec_dev` has to be told to use the new I2C driver.** Its Kconfig
+  defaults `CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE` to `y`, which compiles it
+  against the legacy `driver/i2c.h`, while the touch controller opens the
+  bus with `driver/i2c_master.h`. ESP-IDF refuses to run both: the legacy
+  driver's start-up constructor aborts with `CONFLICT! driver_ng is not
+  allowed to be used with this old driver`, before `app_main`, and the board
+  boot-loops with the panel dark. `sdkconfig.defaults` sets it to `n`. That
+  was the first thing the hardware said when the firmware first ran on it, on
+  16 September 2026, and it is invisible to the build — both drivers link.
 - **`board_touch_init()` has to run before `board_audio_init()`**, because it
   is what creates that I2C bus. `app_main` calls them in that order and the
   audio side refuses to come up if it finds no bus.
@@ -384,11 +393,23 @@ simulator's does — see the voice loop below.
 
 The board has no RTC, so `time(NULL)` counts from reset until something tells
 it otherwise, and SNTP over WiFi is the only thing on this board that can.
-Both are off by default. `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
-an empty SSID keeps the radio down, the watch runs off its boot clock, and the
-WiFi corner draws dim — which is the reading that dimming is for. The timezone
-is compiled in there too, because the device has no locale to turn UTC into
-local time with.
+Both are off by default. The network is `WATCH_WLAN_SSID` and
+`WATCH_WLAN_PASS` in `.env`, which `make firmware` and `make flash` source
+and hand to CMake as `-D` variables; `firmware/main/CMakeLists.txt` turns them
+into two string macros `net.c` reads. An empty SSID keeps the radio down, the
+watch runs off its boot clock, and the WiFi corner draws dim — which is the
+reading that dimming is for. They are in `.env` rather than menuconfig
+because the password is a secret and `.env` is where this repository keeps
+those on both builds; the rest of the device's list is still
+`idf.py -C firmware menuconfig`, under **ESP32 Watch**. The timezone is
+compiled in there, because the device has no locale to turn UTC into local
+time with.
+
+The `-D` route rather than `$ENV{}` in CMake is deliberate: idf.py reruns the
+configure step when a `-D` value differs from the cached one, so a change to
+`.env` is picked up by the next `make firmware`, where a change to the
+environment alone is not. Both are passed even when empty, because an empty
+one is what takes a network back out of the image.
 
 ## The fonts
 
@@ -862,6 +883,8 @@ wants the default says nothing rather than keeping a second copy of it.
 | `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
 | `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
 | `WATCH_VOICE_CLIP` | fixed at `voices/female.wav` | `voices/female.wav`, transcript from the `.txt` beside it |
+| `WATCH_WLAN_SSID` | the same line, compiled in by `make firmware` | the radio stays off; host only ever on the Mac's network |
+| `WATCH_WLAN_PASS` | the same line, compiled in by `make firmware` | an open network |
 
 **The transcript is cleaned the same way the phrase was, and for a while it
 was not.** `voice_wake_set()` strips case and ASCII punctuation from a phrase
@@ -1034,7 +1057,8 @@ address, and that clip. All three are off by default and each one missing
 gives the same answer — a clock with two dim corners. A key is the fourth on
 any server that checks one, and it fails differently: `401`, with the status
 and the server's own sentence in the log, and a line naming the setting to
-fill in. `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
+fill in. The SSID is `WATCH_WLAN_SSID` in `.env` — see the clock, above. The
+rest is `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
 `CONFIG_WATCH_VOICE_URL` is a whole address — `https://omlx.ai-at-home.de`,
 or `http://192.168.1.20:8000` for one on the network the watch joins, but
 never `127.0.0.1`, which on the watch means the watch.

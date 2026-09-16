@@ -165,12 +165,14 @@ make firmware
 make flash
 ```
 
-WiFi, SNTP and the assistant are off until you configure them — `idf.py -C
-firmware menuconfig`, under **ESP32 Watch**. The board has no RTC, so without an
-SSID the clock counts from reset and the WiFi corner draws dim, which is the
-reading that dimming is for. The assistant needs that SSID, a speech server
-URL it can reach, and `voices/female.wav` in the tree when the firmware is
-built; without any one of them the watch is a clock. `CONFIG_WATCH_VOICE_URL`
+WiFi, SNTP and the assistant are off until you configure them. The network
+is `WATCH_WLAN_SSID` and `WATCH_WLAN_PASS` in `.env`, which `make firmware`
+compiles into the image; the rest is `idf.py -C firmware menuconfig`, under
+**ESP32 Watch**. The board has no RTC, so without an SSID the clock counts
+from reset and the WiFi corner draws dim, which is the reading that dimming
+is for. The assistant needs that SSID, a speech server URL it can reach, and
+`voices/female.wav` in the tree when the firmware is built; without any one
+of them the watch is a clock. `CONFIG_WATCH_VOICE_URL`
 takes a whole address — `https://omlx.ai-at-home.de` goes through TLS against
 the certificate bundle ESP-IDF compiles in, `http://192.168.1.20:8000` does
 not — and `CONFIG_WATCH_VOICE_KEY`, the three model names, the language and

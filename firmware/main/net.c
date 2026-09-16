@@ -9,6 +9,11 @@
  * Both are optional and off by default: with no SSID configured the radio
  * stays down, net_is_up() stays false, and the WiFi corner draws dim rather
  * than disappearing — which is exactly the reading that dimming is for.
+ *
+ * The SSID and the password are WATCH_WLAN_SSID and WATCH_WLAN_PASS, two
+ * macros main/CMakeLists.txt defines out of .env rather than Kconfig
+ * entries: the password is a secret, and .env is where this repository
+ * keeps those on both builds. Both always exist, empty when unset.
  */
 
 #include "net.h"
@@ -72,7 +77,7 @@ void net_start(void)
     setenv("TZ", CONFIG_WATCH_TIMEZONE, 1);
     tzset();
 
-    if (CONFIG_WATCH_WIFI_SSID[0] == '\0') {
+    if (WATCH_WLAN_SSID[0] == '\0') {
         ESP_LOGI(TAG, "no SSID set: radio stays off, clock runs from boot");
         return;
     }
@@ -90,8 +95,8 @@ void net_start(void)
                                                         on_event, NULL, NULL));
 
     wifi_config_t config = { 0 };
-    strlcpy((char *) config.sta.ssid, CONFIG_WATCH_WIFI_SSID, sizeof config.sta.ssid);
-    strlcpy((char *) config.sta.password, CONFIG_WATCH_WIFI_PASSWORD, sizeof config.sta.password);
+    strlcpy((char *) config.sta.ssid, WATCH_WLAN_SSID, sizeof config.sta.ssid);
+    strlcpy((char *) config.sta.password, WATCH_WLAN_PASS, sizeof config.sta.password);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
@@ -102,7 +107,7 @@ void net_start(void)
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_WATCH_SNTP_SERVER);
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
 
-    ESP_LOGI(TAG, "joining %s", CONFIG_WATCH_WIFI_SSID);
+    ESP_LOGI(TAG, "joining %s", WATCH_WLAN_SSID);
 }
 
 bool net_is_up(void)
