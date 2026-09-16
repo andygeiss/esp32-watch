@@ -32,19 +32,23 @@ else()
     message(STATUS "WATCH: no voices/female.wav — the assistant will stay asleep")
 endif()
 
-# The network the watch joins, out of .env by way of `make firmware`: the
-# Makefile sources it and passes WATCH_WLAN_SSID and WATCH_WLAN_PASS in as
-# CMake variables, and here they become two string macros net.c reads. They
-# are the host's settings list crossing over to the device the way the
-# server address does, and they are not in Kconfig for the same reason the
-# key is not compiled in on the host — the password is a secret, .env is
-# where this repository keeps those, and a setting that lives in two places
-# is set in one and forgotten in the other.
+# The settings, out of .env by way of `make firmware`: the Makefile sources it
+# and passes every WATCH_* line in as a CMake variable, and here each becomes
+# a string macro of the same name that net.c and voice.c read. It is the
+# host's settings list crossing over to the device unchanged, plus the two
+# WLAN lines only the device needs, so one .env configures both builds. None
+# of them is in Kconfig: two of them are secrets, .env is where this
+# repository keeps those, and a setting that lives in two places is set in
+# one and forgotten in the other. What stays in menuconfig is what .env has
+# no line for — the SNTP server and the timezone.
 #
-# Both macros always exist, empty when nothing was passed, so net.c can test
-# the SSID for '\0' rather than for #ifdef. The two replaces are what make a
-# value with a quote or a backslash in it a valid C string literal.
-foreach(setting WATCH_WLAN_SSID WATCH_WLAN_PASS)
+# Every macro always exists, empty when nothing was passed, so the C tests a
+# value for '\0' rather than for #ifdef. The two replaces are what make a
+# value with a quote or a backslash in it a valid C string literal. A ';' is
+# the one character that cannot travel: CMake reads it as a list separator.
+foreach(setting WATCH_WLAN_SSID WATCH_WLAN_PASS WATCH_VOICE_URL WATCH_VOICE_KEY
+                WATCH_STT_MODEL WATCH_BRAIN_MODEL WATCH_TTS_MODEL WATCH_LANGUAGE
+                WATCH_NAME WATCH_WAKE_PHRASE)
     set(value "${${setting}}")
     string(REPLACE "\\" "\\\\" value "${value}")
     string(REPLACE "\"" "\\\"" value "${value}")
@@ -54,4 +58,9 @@ if(WATCH_WLAN_SSID)
     message(STATUS "WATCH: the watch will join ${WATCH_WLAN_SSID}")
 else()
     message(STATUS "WATCH: no WATCH_WLAN_SSID — the radio stays off")
+endif()
+if(WATCH_VOICE_URL)
+    message(STATUS "WATCH: the assistant will talk to ${WATCH_VOICE_URL}")
+else()
+    message(STATUS "WATCH: no WATCH_VOICE_URL — the assistant stays asleep")
 endif()

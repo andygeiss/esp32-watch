@@ -165,18 +165,19 @@ make firmware
 make flash
 ```
 
-WiFi, SNTP and the assistant are off until you configure them. The network
-is `WATCH_WLAN_SSID` and `WATCH_WLAN_PASS` in `.env`, which `make firmware`
-compiles into the image; the rest is `idf.py -C firmware menuconfig`, under
-**ESP32 Watch**. The board has no RTC, so without an SSID the clock counts
+WiFi, SNTP and the assistant are off until you configure them, and the
+configuration is `.env` — the same file the simulator reads, plus
+`WATCH_WLAN_SSID` and `WATCH_WLAN_PASS` for the network — which `make
+firmware` and `make flash` compile into the image. Only the SNTP server and
+the timezone are `idf.py -C firmware menuconfig`, under **ESP32 Watch**. The board has no RTC, so without an SSID the clock counts
 from reset and the WiFi corner draws dim, which is the reading that dimming
 is for. The assistant needs that SSID, a speech server URL it can reach, and
 `voices/female.wav` in the tree when the firmware is built; without any one
-of them the watch is a clock. `CONFIG_WATCH_VOICE_URL`
+of them the watch is a clock. `WATCH_VOICE_URL`
 takes a whole address — `https://omlx.ai-at-home.de` goes through TLS against
 the certificate bundle ESP-IDF compiles in, `http://192.168.1.20:8000` does
-not — and `CONFIG_WATCH_VOICE_KEY`, the three model names, the language and
-the wake phrase are the rest of the same menu. Empty means the default in
+not — and `WATCH_VOICE_KEY`, the three model names, the language and the
+wake phrase are the rest of the same file. Empty means the default in
 every one of them, and `echo` in the brain means the question said back.
 
 Neither target is part of `make check`: that gate has to stay runnable on a Mac

@@ -61,15 +61,19 @@ clean:
 # first (. ~/esp/esp-idf/export.sh). Deliberately not part of check: that has
 # to stay runnable on a Mac with nothing on it but Homebrew.
 #
-# It sources .env the way run does, for the two lines the board cannot read
-# at run time: the network's name and password go into the image as
-# WATCH_WLAN_SSID and WATCH_WLAN_PASS, through -D so that CMake sees the
-# value each build rather than the one it cached the first time. Both are
-# handed over even when empty, because an empty one is what takes a network
-# back out of the image. The password is a secret, which is why it is in
-# .env and not in sdkconfig.
+# It sources .env the way run does, because the board cannot read a file at
+# run time: every WATCH_* line the simulator reads from the environment goes
+# into the image instead, plus the network's name and password, which only
+# the device needs. Each goes through -D so that CMake sees the value each
+# build rather than the one it cached the first time, and each is handed
+# over even when empty, because an empty one is what takes a setting back
+# out of the image. WATCH_SETTINGS is the list, and firmware/main/
+# CMakeLists.txt is what turns it into macros; add a setting to both.
+WATCH_SETTINGS = WATCH_WLAN_SSID WATCH_WLAN_PASS WATCH_VOICE_URL WATCH_VOICE_KEY \
+	WATCH_STT_MODEL WATCH_BRAIN_MODEL WATCH_TTS_MODEL WATCH_LANGUAGE \
+	WATCH_NAME WATCH_WAKE_PHRASE
 IDF = set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
-	idf.py -C firmware -D "WATCH_WLAN_SSID=$${WATCH_WLAN_SSID}" -D "WATCH_WLAN_PASS=$${WATCH_WLAN_PASS}"
+	idf.py -C firmware $(foreach s,$(WATCH_SETTINGS),-D "$(s)=$${$(s)}")
 
 firmware:
 	$(IDF) build

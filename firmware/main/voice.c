@@ -163,8 +163,8 @@ static bool http_post(const char * path, const char * content_type,
 
     /* No key, no header: an "Authorization: Bearer " with nothing behind it
      * is a rejected request rather than an unauthenticated one. */
-    if (CONFIG_WATCH_VOICE_KEY[0] != '\0') {
-        snprintf(auth, sizeof auth, "Bearer %s", CONFIG_WATCH_VOICE_KEY);
+    if (WATCH_VOICE_KEY[0] != '\0') {
+        snprintf(auth, sizeof auth, "Bearer %s", WATCH_VOICE_KEY);
         esp_http_client_set_header(client, "Authorization", auth);
     }
 
@@ -197,7 +197,7 @@ static bool http_post(const char * path, const char * content_type,
         ESP_LOGE(TAG, "%s: HTTP %d: %.200s", path, status,
                  out->data != NULL ? out->data : "");
         if (status == 401 || status == 403) {
-            ESP_LOGE(TAG, "the server wants a key — set CONFIG_WATCH_VOICE_KEY");
+            ESP_LOGE(TAG, "the server wants a key — set WATCH_VOICE_KEY in .env");
         }
         voice_buf_free(out);
         goto done;
@@ -555,24 +555,24 @@ static bool configure(void)
 {
     voice_models_t models;
 
-    if (!voice_url_parse(CONFIG_WATCH_VOICE_URL, &server)) {
+    if (!voice_url_parse(WATCH_VOICE_URL, &server)) {
         ESP_LOGW(TAG, "no server configured — the watch stays a clock");
         return false;
     }
 
     /* Empty rather than the default spelled out again: menuconfig says
      * nothing and turn.c uses the one list it holds. */
-    models.stt = CONFIG_WATCH_STT_MODEL;
-    models.brain = CONFIG_WATCH_BRAIN_MODEL;
-    models.tts = CONFIG_WATCH_TTS_MODEL;
-    models.language = CONFIG_WATCH_LANGUAGE;
+    models.stt = WATCH_STT_MODEL;
+    models.brain = WATCH_BRAIN_MODEL;
+    models.tts = WATCH_TTS_MODEL;
+    models.language = WATCH_LANGUAGE;
     if (!voice_models_set(&models)) {
         ESP_LOGW(TAG, "a model name does not fit — using the default for it");
     }
-    if (!voice_name_set(CONFIG_WATCH_NAME)) {
+    if (!voice_name_set(WATCH_NAME)) {
         ESP_LOGW(TAG, "that name does not fit — the assistant is still %s", voice_name());
     }
-    if (!voice_wake_set(CONFIG_WATCH_WAKE_PHRASE)) {
+    if (!voice_wake_set(WATCH_WAKE_PHRASE)) {
         ESP_LOGW(TAG, "that wake phrase does not fit — listening for the default");
     }
     /* Both on one line, because they are two settings and forgetting the
@@ -589,7 +589,7 @@ static bool configure(void)
     /* The key is never logged, only whether there is one. */
     ESP_LOGI(TAG, "%s://%s:%s, %s key",
              server.tls ? "https" : "http", server.host, server.port,
-             CONFIG_WATCH_VOICE_KEY[0] != '\0' ? "with a" : "with no");
+             WATCH_VOICE_KEY[0] != '\0' ? "with a" : "with no");
     return true;
 }
 

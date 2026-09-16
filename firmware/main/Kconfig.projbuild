@@ -1,8 +1,10 @@
 menu "ESP32 Watch"
 
-    # The network's name and password are not here. They are WATCH_WLAN_SSID
-    # and WATCH_WLAN_PASS in .env, which `make firmware` compiles in — the
-    # password is a secret, and .env is where this repository keeps those.
+    # The network's name and password, the server, its key, the models, the
+    # name and the wake phrase are not here. They are the WATCH_* lines in
+    # .env, which `make firmware` compiles in — the same list the simulator
+    # reads, two of them secrets, and .env is where this repository keeps
+    # those. See firmware/main/CMakeLists.txt.
 
     config WATCH_SNTP_SERVER
         string "SNTP server"
@@ -15,129 +17,5 @@ menu "ESP32 Watch"
             SNTP hands out UTC and the device has no locale to convert it
             with, so the zone is compiled in. The default is central Europe
             with EU daylight saving.
-
-    config WATCH_VOICE_URL
-        string "Speech server URL"
-        default ""
-        help
-            Where the oMLX server that hears, thinks and speaks is, as a whole
-            address: https://omlx.ai-at-home.de, or http://192.168.1.20:8000
-            for one on the network the watch joins. Not 127.0.0.1, which on
-            the watch means the watch.
-
-            https makes the request go through TLS, checked against the
-            certificate bundle ESP-IDF compiles in. http skips all of that and
-            is what a server on the same network is reached at. The port is
-            the scheme's own unless one is written down.
-
-            Leave it empty and the assistant never starts: the watch is a
-            clock, and the microphone and speaker corners stay dim, which is
-            what that dimming is for.
-
-            It needs a WATCH_WLAN_SSID in .env as well. All three services
-            are on the other end of the radio, so no network means no
-            assistant.
-
-    config WATCH_VOICE_KEY
-        string "Speech server API key"
-        default ""
-        help
-            Sent as "Authorization: Bearer <key>" on every request. A server
-            published on the internet checks one — the proxy in front of
-            omlx.ai-at-home.de holds no secret of its own, so the service
-            behind it is what does the checking.
-
-            Leave it empty and no header is sent at all, which is what an oMLX
-            on the same desk with its key verification off wants. An empty
-            header is a rejected request rather than an unauthenticated one,
-            so the two are not the same thing.
-
-            It is compiled into the image. Anyone with the flash has it.
-
-    config WATCH_STT_MODEL
-        string "Transcribing model"
-        default ""
-        help
-            Empty means the default in voice/turn.h, which is
-            parakeet-tdt-0.6b-v3 and is where that name is written down. Fill
-            it in only to name a different one — a model host serves several
-            and swaps them, which is why this is configuration now.
-
-    config WATCH_BRAIN_MODEL
-        string "Chat model"
-        default ""
-        help
-            What the assistant thinks with. Empty means the default in
-            voice/turn.h, which is Qwen3.8-27B-oQ4e-mtp — the model this
-            watch was built against. Fill it in to name a different one the
-            server hosts.
-
-            Write "echo" and there is no chat request at all: the answer is
-            the question said back, word for word. It needs no third service
-            and is the shortest path through the whole pipeline — a turn that
-            breaks there breaks everywhere — so it is the mode to fall back to
-            when the microphone or the speaker is what is being worked on.
-            Thinking costs several seconds a turn on top of transcribing and
-            speaking.
-
-    config WATCH_TTS_MODEL
-        string "Speaking model"
-        default ""
-        help
-            Empty means the default in voice/turn.h, which is
-            chatterbox-multilingual-v3. It ships no voices of its own, so the
-            reference clip is what it borrows one from either way.
-
-    config WATCH_LANGUAGE
-        string "Language spoken"
-        default ""
-        help
-            The language the synthesiser is told to speak, as a two-letter
-            code. Empty means the default in voice/turn.h, which is "de". The
-            transcriber detects its own and the chat model is asked to answer
-            in whichever language it was spoken to, so this is the synthesiser
-            alone.
-
-    config WATCH_NAME
-        string "Assistant name"
-        default ""
-        help
-            What the assistant calls itself. Empty means "Kai". It reaches the
-            chat model through the system prompt, so this is the answer to
-            "who are you?" and nothing else — it does not change what the
-            microphone listens for.
-
-            Set it together with the wake phrase below. They are two settings
-            on purpose: the wake list is what the transcriber writes down for
-            a name it has never been shown, and its built-in spellings include
-            "hey ky" and "hey chai", so a name taken from it would have the
-            watch introducing itself as Chai. What it is called and how it is
-            misheard are two different facts.
-
-            The start-up log names both.
-
-    config WATCH_WAKE_PHRASE
-        string "Wake phrase"
-        default ""
-        help
-            What the watch answers to. There is no wake-word model on this
-            board: everything the room says is transcribed, and the watch
-            wakes when this turns up in the text.
-
-            Leave it empty and it listens for "hey kai" and the five other
-            spellings the transcriber has been seen to return for that name,
-            which is the list in voice/turn.c and the only place it is
-            written down.
-
-            Fill it in and it listens for that instead. Case and punctuation
-            do not matter. Give the spellings a transcriber is likely to
-            produce, separated by '|' — a name it has never been shown is
-            rarely written the same way twice:
-
-                hey ada|hey adah|hi ada
-
-            Match the greeting and not the name on its own, or every word
-            that merely starts the same way wakes the watch. Changing this
-            alone does not rename the assistant — that is WATCH_NAME above.
 
 endmenu

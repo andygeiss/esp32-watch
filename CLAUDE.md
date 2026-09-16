@@ -400,10 +400,11 @@ into two string macros `net.c` reads. An empty SSID keeps the radio down, the
 watch runs off its boot clock, and the WiFi corner draws dim — which is the
 reading that dimming is for. They are in `.env` rather than menuconfig
 because the password is a secret and `.env` is where this repository keeps
-those on both builds; the rest of the device's list is still
-`idf.py -C firmware menuconfig`, under **ESP32 Watch**. The timezone is
-compiled in there, because the device has no locale to turn UTC into local
-time with.
+those on both builds. The voice settings take the same road, so the whole of
+`.env` is the device's configuration too; what is left under
+`idf.py -C firmware menuconfig`, **ESP32 Watch**, is the SNTP server and the
+timezone, which `.env` has no line for. The timezone is compiled in there
+because the device has no locale to turn UTC into local time with.
 
 The `-D` route rather than `$ENV{}` in CMake is deliberate: idf.py reruns the
 configure step when a `-D` value differs from the cached one, so a change to
@@ -644,8 +645,7 @@ is the same loop in Go:
 **The answer comes from a chat model, or is the question said back.** The
 model is the default — `Qwen3.8-27B-oQ4e-mtp`, in `turn.h` beside the other
 three — so a watch with a server configured thinks rather than echoes. The
-word `echo` in `WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL` turns it off
-again; it is a word rather than an empty string because empty already means
+word `echo` in `WATCH_BRAIN_MODEL` turns it off again; it is a word rather than an empty string because empty already means
 "the default", and `turn.c` is where that word is understood, once, on the way
 in. `BRAIN=echo` is what the Go orchestrator calls the same mode. The echo
 is a mode rather than a
@@ -796,9 +796,7 @@ in one go.
 
 **The phrase is configuration, and `Hey Kai` is its default.** The platform
 hands `voice_wake_set()` a `|`-separated list of spellings at start-up —
-`WATCH_WAKE_PHRASE` in the host's environment, `CONFIG_WATCH_WAKE_PHRASE` on
-the device
-— which is the crossing the server address already makes. An empty list means
+`WATCH_WAKE_PHRASE` in `.env` on both — which is the crossing the server address already makes. An empty list means
 `WAKE` itself, so those six spellings stay written down exactly once and a
 platform that wants them says nothing rather than repeating them. Case and
 punctuation come off on the way in, so `Hey Kai!` and `hey kai` are one
@@ -864,27 +862,34 @@ proves only that some CA signed something. The device gets the same two things
 from `esp_http_client` plus the certificate bundle ESP-IDF already compiles in
 (`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`), which is one line in `http_post()`.
 
-**Everything about the server is configuration, and it is the same list
+**Everything about the server is configuration, and it is one list read
 twice.** The address, the API key, the three model names, the language and the
-wake phrase: the environment on the host, menuconfig on the device, and both
-hand them to `voice_url_parse()`, `voice_models_set()` and `voice_wake_set()`
+wake phrase: `.env` sourced into the environment on the host, `.env` compiled
+into the image on the device, and both hand them to `voice_url_parse()`, `voice_models_set()` and `voice_wake_set()`
 in `turn.c`. Empty means the default, which is written down exactly once — in
 `turn.h` for the models, in `turn.c` for the wake table — so a platform that
 wants the default says nothing rather than keeping a second copy of it.
 
-| host, from the environment | device, from menuconfig | empty means |
-|---|---|---|
-| `WATCH_VOICE_URL` | `CONFIG_WATCH_VOICE_URL` | `http://127.0.0.1:8000` on the host; on the device, no assistant at all |
-| `WATCH_VOICE_KEY` | `CONFIG_WATCH_VOICE_KEY` | no `Authorization` header is sent |
-| `WATCH_STT_MODEL` | `CONFIG_WATCH_STT_MODEL` | `parakeet-tdt-0.6b-v3` |
-| `WATCH_BRAIN_MODEL` | `CONFIG_WATCH_BRAIN_MODEL` | `Qwen3.8-27B-oQ4e-mtp`; the word `echo` means no chat request at all |
-| `WATCH_TTS_MODEL` | `CONFIG_WATCH_TTS_MODEL` | `chatterbox-multilingual-v3` |
-| `WATCH_LANGUAGE` | `CONFIG_WATCH_LANGUAGE` | `de` |
-| `WATCH_NAME` | `CONFIG_WATCH_NAME` | `Kai` |
-| `WATCH_WAKE_PHRASE` | `CONFIG_WATCH_WAKE_PHRASE` | the six spellings in `WAKE` |
-| `WATCH_VOICE_CLIP` | fixed at `voices/female.wav` | `voices/female.wav`, transcript from the `.txt` beside it |
-| `WATCH_WLAN_SSID` | the same line, compiled in by `make firmware` | the radio stays off; host only ever on the Mac's network |
-| `WATCH_WLAN_PASS` | the same line, compiled in by `make firmware` | an open network |
+| `.env` line | host | device | empty means |
+|---|---|---|---|
+| `WATCH_VOICE_URL` | environment | compiled in | `http://127.0.0.1:8000` on the host; on the device, no assistant at all |
+| `WATCH_VOICE_KEY` | environment | compiled in | no `Authorization` header is sent |
+| `WATCH_STT_MODEL` | environment | compiled in | `parakeet-tdt-0.6b-v3` |
+| `WATCH_BRAIN_MODEL` | environment | compiled in | `Qwen3.8-27B-oQ4e-mtp`; the word `echo` means no chat request at all |
+| `WATCH_TTS_MODEL` | environment | compiled in | `chatterbox-multilingual-v3` |
+| `WATCH_LANGUAGE` | environment | compiled in | `de` |
+| `WATCH_NAME` | environment | compiled in | `Kai` |
+| `WATCH_WAKE_PHRASE` | environment | compiled in | the six spellings in `WAKE` |
+| `WATCH_VOICE_CLIP` | environment | fixed at `voices/female.wav` | `voices/female.wav`, transcript from the `.txt` beside it |
+| `WATCH_WLAN_SSID` | unused | compiled in | the radio stays off |
+| `WATCH_WLAN_PASS` | unused | compiled in | an open network |
+
+"Compiled in" is `make firmware` and `make flash` sourcing `.env` and
+passing each line to CMake as a `-D` variable, which
+`firmware/main/CMakeLists.txt` turns into a string macro of the same name —
+see the clock, above. One `.env` configures both builds, and there is no
+second list under menuconfig: what stays there is the SNTP server and the
+timezone, which `.env` has no line for.
 
 **The transcript is cleaned the same way the phrase was, and for a while it
 was not.** `voice_wake_set()` strips case and ASCII punctuation from a phrase
@@ -1057,17 +1062,16 @@ address, and that clip. All three are off by default and each one missing
 gives the same answer — a clock with two dim corners. A key is the fourth on
 any server that checks one, and it fails differently: `401`, with the status
 and the server's own sentence in the log, and a line naming the setting to
-fill in. The SSID is `WATCH_WLAN_SSID` in `.env` — see the clock, above. The
-rest is `idf.py -C firmware menuconfig`, under **ESP32 Watch**:
-`CONFIG_WATCH_VOICE_URL` is a whole address — `https://omlx.ai-at-home.de`,
+fill in. All of them are `.env` lines, compiled in by `make firmware` — see
+the clock, above. `WATCH_VOICE_URL` is a whole address — `https://omlx.ai-at-home.de`,
 or `http://192.168.1.20:8000` for one on the network the watch joins, but
 never `127.0.0.1`, which on the watch means the watch.
 
 Because they default off, the interesting half of `firmware/main/voice.c` is
 folded away by the compiler in a default build — `voice_start()` returns at
 its first line and the linker drops the rest. A build that only proves the
-default configuration is not proof the voice path compiles. Set a URL in
-`sdkconfig` before believing a green firmware build.
+default configuration is not proof the voice path compiles. Set
+`WATCH_VOICE_URL` in `.env` before believing a green firmware build.
 
 ### The benchmark
 
@@ -1203,7 +1207,7 @@ is compiled into the firmware and is what an unconfigured watch uses, and a
 default naming a model the server does not have is a `404` on every turn —
 silence, by the rule two sections up, because a brain that is configured and
 fails is not allowed to echo. A brain still on trial belongs in
-`WATCH_BRAIN_MODEL` or `CONFIG_WATCH_BRAIN_MODEL`, where changing it costs one
+`WATCH_BRAIN_MODEL`, where changing it costs one
 line and breaks nothing else; the default should name the model most likely to
 answer.
 
