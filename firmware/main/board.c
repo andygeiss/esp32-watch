@@ -12,6 +12,7 @@
 #include "board.h"
 
 #include <assert.h>
+#include <string.h>
 
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
@@ -36,6 +37,7 @@ static const char * TAG = "board";
  * board_touch_init() creates it, board_audio_init() borrows it, so the order
  * of the two calls in app_main is load-bearing. */
 static i2c_master_bus_handle_t i2c;
+static esp_lcd_panel_handle_t  panel;
 
 /* QSPI to the display controller. */
 #define BOARD_LCD_HOST  SPI2_HOST
@@ -167,7 +169,6 @@ lv_display_t * board_display_init(void)
         .bits_per_pixel = 16,
         .vendor_config = &vendor,
     };
-    esp_lcd_panel_handle_t panel = NULL;
     ESP_ERROR_CHECK(esp_lcd_new_panel_sh8601(io, &panel_config, &panel));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
@@ -190,14 +191,33 @@ lv_display_t * board_display_init(void)
     return display;
 }
 
-/* The controller's INT line, as a flag the read callback consumes. The
- * driver's ISR runs on the edge and does nothing else. */
+void board_display_sleep(bool asleep)
+{
+    static bool is_asleep;
+
+    if (panel == NULL || asleep == is_asleep) return;
+    esp_lcd_panel_disp_on_off(panel, !asleep);
+    is_asleep = asleep;
+}
+
+/* The controller's INT line, as two flags: one the read callback consumes,
+ * one the wake policy does. The driver's ISR runs on the edge and does
+ * nothing else. */
 static volatile bool touch_pending;
+static volatile bool touch_tapped;
 
 static void IRAM_ATTR touch_interrupt(esp_lcd_touch_handle_t touch)
 {
     (void) touch;
     touch_pending = true;
+    touch_tapped = true;
+}
+
+bool board_touch_take_tap(void)
+{
+    bool tapped = touch_tapped;
+    touch_tapped = false;
+    return tapped;
 }
 
 /* One finger is all this UI asks for: a button, and later a face to tap.
@@ -548,4 +568,161 @@ int board_battery_read(bool * charging)
 
     *charging = (status2 >> 5) == 1;
     return pct > 100 ? 100 : pct;
+}
+
+/* ------------------------------------------------------------------ */
+/* The real-time clock. A PCF85063 at 0x51, powered from the battery through */
+/* the AXP2101, so it keeps counting while the chip is off. It holds UTC and  */
+/* the firmware turns that into local time with the compiled-in zone, the     */
+/* same way it does for SNTP. Seven BCD registers and one flag.               */
+/* ------------------------------------------------------------------ */
+
+#define PCF85063_ADDR    0x51
+#define PCF85063_CTRL1   0x00  /* bit 5: stop; bit 1: 12-hour mode */
+#define PCF85063_SECONDS 0x04  /* bit 7: the oscillator stopped, time invalid */
+
+static i2c_master_dev_handle_t rtc;
+
+static bool dev_add(uint8_t address, i2c_master_dev_handle_t * out)
+{
+    const i2c_device_config_t dev = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = address,
+        .scl_speed_hz = 100000,
+    };
+    return i2c != NULL && i2c_master_bus_add_device(i2c, &dev, out) == ESP_OK;
+}
+
+static bool dev_read(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t * out, size_t n)
+{
+    return i2c_master_transmit_receive(dev, &reg, 1, out, n, 50) == ESP_OK;
+}
+
+static bool dev_write(i2c_master_dev_handle_t dev, uint8_t reg, const uint8_t * in, size_t n)
+{
+    uint8_t frame[8];
+    if (n + 1 > sizeof frame) return false;
+    frame[0] = reg;
+    memcpy(frame + 1, in, n);
+    return i2c_master_transmit(dev, frame, n + 1, 50) == ESP_OK;
+}
+
+static uint8_t from_bcd(uint8_t v) { return (uint8_t) ((v >> 4) * 10 + (v & 0x0F)); }
+static uint8_t to_bcd(uint8_t v)   { return (uint8_t) (((v / 10) << 4) | (v % 10)); }
+
+/* Days since 1970-01-01 for a civil date, so the RTC's fields become a
+ * time_t without a timegm() the C library here may not have. */
+static long days_from_civil(int y, unsigned m, unsigned d)
+{
+    y -= m <= 2;
+    const long era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned) (y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long) doe - 719468;
+}
+
+bool board_rtc_init(void)
+{
+    uint8_t ctrl = 0;
+
+    if (!dev_add(PCF85063_ADDR, &rtc)) return false;
+    if (!dev_read(rtc, PCF85063_CTRL1, &ctrl, 1)) {
+        ESP_LOGW(TAG, "no PCF85063 at 0x%02X — the clock runs from boot", PCF85063_ADDR);
+        i2c_master_bus_rm_device(rtc);
+        rtc = NULL;
+        return false;
+    }
+    /* Running, 24-hour. Only the two bits change. */
+    if (ctrl & 0x22) {
+        ctrl &= (uint8_t) ~0x22;
+        dev_write(rtc, PCF85063_CTRL1, &ctrl, 1);
+    }
+    return true;
+}
+
+bool board_rtc_read(time_t * utc)
+{
+    uint8_t r[7];
+    struct tm tm = { 0 };
+
+    if (rtc == NULL || !dev_read(rtc, PCF85063_SECONDS, r, sizeof r)) return false;
+    if (r[0] & 0x80) return false; /* never set since it last lost power */
+
+    tm.tm_sec  = from_bcd(r[0] & 0x7F);
+    tm.tm_min  = from_bcd(r[1] & 0x7F);
+    tm.tm_hour = from_bcd(r[2] & 0x3F);
+    tm.tm_mday = from_bcd(r[3] & 0x3F);
+    tm.tm_mon  = from_bcd(r[5] & 0x1F) - 1;
+    tm.tm_year = from_bcd(r[6]) + 100;
+
+    *utc = days_from_civil(tm.tm_year + 1900, (unsigned) tm.tm_mon + 1, (unsigned) tm.tm_mday)
+               * 86400L + tm.tm_hour * 3600L + tm.tm_min * 60L + tm.tm_sec;
+    return true;
+}
+
+bool board_rtc_write(time_t utc)
+{
+    struct tm tm;
+    uint8_t r[7];
+
+    if (rtc == NULL) return false;
+    gmtime_r(&utc, &tm);
+    r[0] = to_bcd((uint8_t) tm.tm_sec); /* bit 7 clear: the time is valid now */
+    r[1] = to_bcd((uint8_t) tm.tm_min);
+    r[2] = to_bcd((uint8_t) tm.tm_hour);
+    r[3] = to_bcd((uint8_t) tm.tm_mday);
+    r[4] = (uint8_t) tm.tm_wday;
+    r[5] = to_bcd((uint8_t) (tm.tm_mon + 1));
+    r[6] = to_bcd((uint8_t) (tm.tm_year - 100));
+    return dev_write(rtc, PCF85063_SECONDS, r, sizeof r);
+}
+
+/* ------------------------------------------------------------------ */
+/* The motion sensor. A QMI8658 at 0x6B. Only its accelerometer runs, at     */
+/* ±2 g, because a raised wrist is a question about which way is down and    */
+/* whether that just changed — the gyroscope would cost ten times the        */
+/* current to answer the same thing.                                         */
+/* ------------------------------------------------------------------ */
+
+#define QMI8658_ADDR     0x6B
+#define QMI8658_WHO_AM_I 0x00  /* reads 0x05 */
+#define QMI8658_CTRL1    0x02  /* bit 6: the address auto-increments on a burst read */
+#define QMI8658_CTRL2    0x03  /* bits 6:4 accel range, bits 3:0 accel rate */
+#define QMI8658_CTRL7    0x08  /* bit 0: accelerometer on */
+#define QMI8658_AX_L     0x35  /* six bytes: x, y, z, low byte first */
+#define QMI8658_ID       0x05
+#define QMI8658_LSB_PER_G 16384.0f /* at ±2 g */
+
+static i2c_master_dev_handle_t imu;
+
+bool board_motion_init(void)
+{
+    uint8_t id = 0, v;
+
+    if (!dev_add(QMI8658_ADDR, &imu)) return false;
+    if (!dev_read(imu, QMI8658_WHO_AM_I, &id, 1) || id != QMI8658_ID) {
+        ESP_LOGW(TAG, "no QMI8658 at 0x%02X (id 0x%02X) — the panel stays lit",
+                 QMI8658_ADDR, id);
+        i2c_master_bus_rm_device(imu);
+        imu = NULL;
+        return false;
+    }
+    v = 0x40; dev_write(imu, QMI8658_CTRL1, &v, 1); /* auto-increment */
+    v = 0x06; dev_write(imu, QMI8658_CTRL2, &v, 1); /* ±2 g, 125 Hz */
+    v = 0x01; dev_write(imu, QMI8658_CTRL7, &v, 1); /* accelerometer on */
+    return true;
+}
+
+bool board_motion_read(float g[3])
+{
+    uint8_t raw[6];
+    int i;
+
+    if (imu == NULL || !dev_read(imu, QMI8658_AX_L, raw, sizeof raw)) return false;
+    for (i = 0; i < 3; i++) {
+        int16_t counts = (int16_t) ((raw[2 * i + 1] << 8) | raw[2 * i]);
+        g[i] = (float) counts / QMI8658_LSB_PER_G;
+    }
+    return true;
 }

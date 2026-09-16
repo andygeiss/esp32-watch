@@ -412,17 +412,54 @@ voltage the start-up line prints beside it before trusting a full reading.
 And the corner's charging bolt means the charger is putting charge in, so a
 full battery on USB reads 100% without it — `charge done, on USB` in the log.
 
-The same bus holds two more chips this firmware does not use yet, both found
-by probing: a PCF85063 real-time clock at 0x51, powered from the battery
-through the AXP2101, and a QMI8658 motion sensor at 0x6B. The clock is the
-next one worth wiring, for the reason the section below explains.
+The same bus holds two more chips, both found by probing and both used
+now: a PCF85063 real-time clock at 0x51, powered from the battery through
+the AXP2101, and a QMI8658 motion sensor at 0x6B. All three are read the
+same way, by hand, through `dev_read()` and `dev_write()` in `board.c`.
 
 ### The clock
 
-The firmware does not read a real-time clock yet, so `time(NULL)` counts from
-reset until something tells it otherwise, and SNTP over WiFi is the only thing
-here that does. The board does have one — the PCF85063 above — and reading it
-at boot would give the watch the time without a network.
+The PCF85063 keeps counting while the chip is off, so the watch has the time
+before it has a network. `clock_from_rtc()` in `main.c` reads it at boot and
+sets the system clock from it — `clock set from the RTC` in the log — and
+SNTP, when the radio is up, corrects the system clock and writes the RTC
+back through `net.c`'s sync callback, so the next boot has the correction.
+A clock that has never been set says so in its seconds register, and the
+watch runs from boot until SNTP arrives, which is what the first boot did.
+The RTC holds UTC; the compiled-in timezone turns it into local time the same
+way it turns SNTP's UTC.
+
+Without a network and with an RTC that has been set once, the clock drifts
+at the crystal's rate, a few seconds a month. That is the reading a watch
+with no radio gives, and it is right for far longer than a boot clock.
+
+### Raise to wake
+
+The panel is lit when someone wants to read it and dark otherwise, and the
+QMI8658's accelerometer is what says which. `wake_tick()` in `main.c` reads
+the acceleration vector ten times a second. Two things light the panel for
+eight seconds: a tap on the glass, which the touch controller's interrupt
+already reports as a flag, and the watch *moving* and then being *face up* —
+the vector changing by more than a quarter g between two samples, with the
+panel's normal within 0.6 g of straight up. A watch on a desk never moves; a
+lifted wrist always does; and face down goes dark at once. The boot face is
+held eight seconds too, so a watch that has just started can be looked at.
+
+Only the accelerometer runs, at ±2 g and 125 Hz. The gyroscope would cost
+ten times the current to answer the same question. Which axis is up was
+read off the first run rather than assumed: flat and face up the sensor
+reports +0.13, +0.18, −1.01, so up is the third axis and negative — the chip
+is mounted with its Z pointing into the wrist, and `WAKE_UP_SIGN` says so.
+Guess it and the panel is dark exactly when the watch is being read, which
+is what the first flash did.
+
+Dark is `esp_lcd_panel_disp_on_off(panel, false)`, the panel's own display-off
+command; LVGL carries on rendering underneath, so the panel lights on the
+present frame rather than the one it went dark on. Nothing under `ui.h`
+knows any of this: when the panel is lit is a fact about the platform, the
+same as the charge and the radio, and it stays on this side of the boundary.
+The log says `panel lit` and `panel dark` on every change, which is how the
+thresholds get tuned against a real wrist.
 Both are off by default. The network is `WATCH_WLAN_SSID` and
 `WATCH_WLAN_PASS` in `.env`, which `make firmware` and `make flash` source
 and hand to CMake as `-D` variables; `firmware/main/CMakeLists.txt` turns them

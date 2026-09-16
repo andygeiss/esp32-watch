@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "lvgl.h"
+#include <time.h>
 
 /* The panel. The same two numbers as the simulator window, which is the whole
  * point of the simulator being 1:1 — see CLAUDE.md. */
@@ -30,6 +31,35 @@ lv_display_t * board_display_init(void);
 
 /** Bring up the touch controller as a pointer device on `display`. */
 lv_indev_t * board_touch_init(lv_display_t * display);
+
+/** True once per touch-down since the last call: a tap is a reason to light
+ * the panel, whether or not anything under it is pressable. */
+bool board_touch_take_tap(void);
+
+/** Blank the panel or light it. Rendering carries on underneath either way,
+ * so a lit panel shows the present and not the frame it went dark on. */
+void board_display_sleep(bool asleep);
+
+/* ------------------------------------------------------------------ */
+/* The real-time clock and the motion sensor: a PCF85063 and a QMI8658, both */
+/* on the touch controller's I2C bus, so board_touch_init() first here too.  */
+/* ------------------------------------------------------------------ */
+
+/** Find the RTC. False if it is not there. */
+bool board_rtc_init(void);
+
+/** The RTC's time as UTC. False when it has no valid time to give — after
+ * its first power-up, until board_rtc_write() has set it once. */
+bool board_rtc_read(time_t * utc);
+
+/** Set the RTC, in UTC. Safe from any task: the bus is locked per transfer. */
+bool board_rtc_write(time_t utc);
+
+/** Find the motion sensor and start its accelerometer. False if not there. */
+bool board_motion_init(void);
+
+/** The acceleration vector in g. False if there is no sensor. */
+bool board_motion_read(float g[3]);
 
 /* ------------------------------------------------------------------ */
 /* Audio. The ES7210 in front of the microphones and the ES8311 in front of   */

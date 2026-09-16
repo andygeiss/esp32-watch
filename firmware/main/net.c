@@ -2,9 +2,9 @@
  * @file net.c
  * WiFi, and the time that comes with it.
  *
- * The RTC on this board is not read yet, so time(NULL) in ui.c counts from the instant the
- * chip came out of reset until something tells it otherwise. SNTP over WiFi
- * is the only thing on this board that can.
+ * main.c sets the clock from the RTC at boot; SNTP over WiFi is what corrects
+ * it, and each correction goes back into the RTC from here so the next boot
+ * has it.
  *
  * Both are optional and off by default: with no SSID configured the radio
  * stays down, net_is_up() stays false, and the WiFi corner draws dim rather
@@ -17,6 +17,7 @@
  */
 
 #include "net.h"
+#include "board.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -54,6 +55,15 @@ static void on_event(void * arg, esp_event_base_t base, int32_t id, void * data)
         atomic_store(&link_up, true);
         ESP_LOGI(TAG, "associated");
     }
+}
+
+/* Runs in the SNTP task, which is why board_rtc_write() locks the bus per
+ * transfer rather than assuming one caller. */
+static void on_time_synced(struct timeval * tv)
+{
+    (void) tv;
+    if (board_rtc_write(time(NULL))) ESP_LOGI(TAG, "SNTP set the clock and the RTC");
+    else ESP_LOGI(TAG, "SNTP set the clock");
 }
 
 /* NVS holds the radio's calibration data, so WiFi needs it mounted. A version
@@ -103,8 +113,10 @@ void net_start(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     /* SNTP starts here and waits for the association by itself, then keeps
-     * the clock honest for as long as the watch is up. */
+     * the clock honest for as long as the watch is up — and hands each
+     * correction to the RTC, so the next boot has it without a network. */
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_WATCH_SNTP_SERVER);
+    sntp.sync_cb = on_time_synced;
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
 
     ESP_LOGI(TAG, "joining %s", WATCH_WLAN_SSID);
