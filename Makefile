@@ -43,6 +43,7 @@ check:
 	! nm -u build/ui-portable.o | grep -i 'sdl\|esp_'
 	clang -std=c11 -Wall -Wextra -Werror -Ivoice -c voice/turn.c -o build/turn-portable.o
 	! nm -u build/turn-portable.o | grep -i 'sdl\|esp_'
+	./build/kai_turn_test
 	./build/kai_test
 
 # The same gates against the commit: a file never added, such as the generated
@@ -94,4 +95,5 @@ run: build
 
 # The inner loop: the last gate of check, without the rest of them.
 test: build
+	./build/kai_turn_test
 	./build/kai_test

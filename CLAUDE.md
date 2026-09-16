@@ -178,8 +178,12 @@ directory they cannot reach.
     make run
 
 `make` on its own is `make check`: the `lv_conf.h` liveness grep above, the
-build, the boundary check below, and `test_ui.c`, in that order. `make test`
-runs that last gate alone, for the inner loop. `make ci` runs all of them
+build, the boundary check below, `test_turn.c` and then `test_ui.c`, in that
+order. `make test` runs those last two alone, for the inner loop.
+`test_turn.c` is the words — what wakes the watch and what puts it back —
+against `voice/turn.c` alone, with no server and no microphone, and it links
+`kai_turn` and nothing else, which is that file's claim about itself
+compiled a third time. `make ci` runs all of them
 against the commit, which is what catches a file that was never added — it
 symlinks this checkout's `lvgl/` into the copy, since a gitignored directory
 is never in the archive. `make clean` removes `build/`.
@@ -526,6 +530,16 @@ touch panel is still initialised on the device: the face is a thing to tap
 later, and the eyes deliberately have `LV_OBJ_FLAG_CLICKABLE` off so they
 cannot swallow that tap.
 
+**The touch controller is read on its interrupt, not polled.** Polled blind
+at LVGL's 30 ms, the FT5x06 logged an I2C NACK every half minute or so with
+nothing on the glass — it idles into a slower scan and does not always
+answer from there — and the two codecs share that bus. `board.c` reads it
+only after the INT line has fired or while the last read still had a finger
+down; an idle chip that is never addressed cannot fail to answer, and 150 s
+with the gate in logged nothing where 120 s without it logged three. This
+holds whichever interrupt mode the chip is in: a touch-down is an edge in
+both, and from then on the read itself says when the finger has gone.
+
 **The morph** takes 400 ms. Each eye is an `lv_obj` that starts as the digit
 group's own box — same size, same centre, `LV_RADIUS_CIRCLE`, invisible — so
 the switch is that box pulling in square while the digits fade off the front of
@@ -816,7 +830,13 @@ sends what it hears.
 **Two ways back to the clock, because a misheard word must not trap you.** A
 goodbye — `tschüss`, `quit`, `stop` — matched against the whole transcript
 rather than as a substring, so *stopp mal die Musik* is a thing to answer; and
-`VOICE_IDLE_MS`, 30 s with nothing said, which needs no word at all.
+`VOICE_IDLE_MS`, 30 s with nothing said, which needs no word at all. The
+goodbye may be followed by the assistant's name and nothing else, because
+*Tschüss, Lizzie* is how anyone says goodbye to something with a name: the
+first turn on hardware said exactly that and was answered rather than obeyed,
+and the watch then spent 30 s answering the room. `host/test_turn.c` holds
+that case and the ones it must not open — *tschüss sagen wir später*,
+*tschüss Kaiser* — and `make check` runs it.
 `record()` takes that as a deadline on the silence *before* the first word,
 and `VOICE_WAIT_FOREVER` is the same function asleep, where there is nothing
 to time out of.
@@ -849,6 +869,21 @@ JSON is a scanner for one string field, not a parser; and base64 and the WAV
 header are twenty lines each. That is not a workaround. The device speaks to
 the same three endpoints through `esp_http_client`, and a body built by hand
 ports where a libcurl call site would not.
+
+**One connection, kept open across the three requests and the turns after
+them.** It was one connection per request on both platforms, on the grounds
+that three requests seconds apart made a pool bookkeeping for nothing — and
+the first turn on hardware showed `Certificate validated` three times a turn
+in the log, each a chain checked on a 240 MHz core. Keeping the connection
+is what the hand-written client had been spared until then: a reply's end
+is its `Content-Length`, or its last chunk when it came chunked, because an
+open connection never reaches end of file, and a reply that says
+`Connection: close` is read to the end and the socket dropped. A connection
+the server has quietly dropped in the meantime shows up as a failed send or
+an empty reply before any status, and is opened again exactly once. The
+benchmark's `stt` column is where it shows on the host — 679 ms on the first
+run of a session and 140 ms on the next — and the device's log is where it
+shows there: one handshake per session rather than three per turn.
 
 **OpenSSL is `send()` and `recv()` and nothing above them.** It went in when
 the server stopped being on the same desk: `omlx.ai-at-home.de` answers `308`

@@ -149,9 +149,9 @@ written down in `voice/turn.h` — `Qwen3.8-27B-oQ4e-mtp` for the brain, so the
 watch thinks unless `WATCH_BRAIN_MODEL=echo` tells it to say the question back
 instead. `make` on its
 own is `make check`: the `lv_conf.h` liveness grep, the build, the boundary
-check, and 108 assertions rendered into a byte array by `test_ui.c` —
-geometry, opacity, label text and the pixels themselves, with no window and no
-screenshot. `make ci` runs the lot against the commit.
+check, 26 checks on the words in `voice/turn.c` by `test_turn.c`, and 108
+assertions rendered into a byte array by `test_ui.c` — geometry, opacity,
+label text and the pixels themselves, with no window and no screenshot. `make ci` runs the lot against the commit.
 
 ### The firmware
 

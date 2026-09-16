@@ -61,10 +61,15 @@
 #define VOICE_RECV_TIMEOUT_S 1
 
 /* ------------------------------------------------------------------ */
-/* HTTP. One connection per request, closed at the end of it: a turn makes    */
-/* three requests seconds apart, so a keep-alive pool would be bookkeeping     */
-/* for nothing. No redirects — the address is asked for exactly what it        */
-/* publishes — and all three services answer with a Content-Length.            */
+/* HTTP. One connection, kept open across the three requests of a turn and   */
+/* the turns after it. It was one per request, on the grounds that three     */
+/* requests seconds apart made a pool bookkeeping for nothing — and the       */
+/* first turn on the board showed three TLS handshakes a turn in its log.     */
+/* The firmware keeps its connection the same way, so this is the same shape */
+/* written twice. No redirects — the address is asked for exactly what it    */
+/* publishes. The reply's end is its Content-Length, or its last chunk when   */
+/* it came chunked, because a connection that stays open never reaches end   */
+/* of file; one that says "Connection: close" is read to the end and dropped. */
 /* ------------------------------------------------------------------ */
 
 /* The server, and what it wants to see. Both are read once, at start-up. */
@@ -264,26 +269,62 @@ static bool header_value(const char * headers, const char * name, char * out, si
     return false;
 }
 
-/* POSTs body to path and returns the reply body in out, with its content type
- * in mime. Reports the server's own status and the head of its message on a
- * failure: it is the fastest route to the cause, and all three services answer
- * a bad request with a sentence saying what was wrong. */
-static bool http_post(const char * path, const char * content_type,
-                      const void * body, size_t body_len,
-                      voice_buf_t * out, char * mime, size_t mime_cap)
+/* The one connection, opened on the first request and kept until it fails
+ * or the server closes it. Only the voice thread touches it. */
+static conn_t conn = { -1, NULL };
+static bool   conn_up;
+
+/* Where the header block ends: the offset just past "\r\n\r\n", or 0. */
+static size_t headers_end(const voice_buf_t * raw)
 {
-    conn_t conn;
+    const char * split = raw->data == NULL ? NULL : strstr(raw->data, "\r\n\r\n");
+    return split == NULL ? 0 : (size_t) (split - raw->data) + 4;
+}
+
+/* Unpicks a chunked body in place — every chunk's payload moved down over its
+ * size line — and returns the payload's length. The last chunk's "0\r\n\r\n"
+ * is what says the reply is over, and dechunk() is only called once it is. */
+static size_t dechunk(char * body, size_t len)
+{
+    size_t in = 0, out = 0;
+
+    while (in < len) {
+        char * end;
+        size_t size = strtoul(body + in, &end, 16);
+        const char * line = strstr(end, "\r\n");
+        if (line == NULL || size == 0) break;
+        in = (size_t) (line - body) + 2;
+        if (in + size > len) break;
+        memmove(body + out, body + in, size);
+        out += size;
+        in += size + 2; /* the CRLF after the payload */
+    }
+    return out;
+}
+
+/* One attempt over whatever connection is in hand. `dead` comes back true
+ * when the connection failed before a status arrived — which is what a
+ * keep-alive the server has since dropped looks like — and false for
+ * everything the server actually answered. */
+static bool post_once(const char * path, const char * content_type,
+                      const void * body, size_t body_len,
+                      voice_buf_t * out, char * mime, size_t mime_cap, bool * dead)
+{
     char head[1024];
     char host_header[VOICE_HOST_BYTES + VOICE_PORT_BYTES + 2];
     char auth[VOICE_KEY_BYTES + 32];
+    char value[64];
     voice_buf_t raw = { 0 };
-    const char * split;
-    char length_header[32];
-    size_t header_len, want;
+    size_t header_len = 0, want = 0, have;
+    bool chunked = false, sized = false, close_after = false;
     int status = 0, waited;
     bool ok = false;
 
-    if (!conn_open(&conn)) return false;
+    *dead = false;
+    if (!conn_up) {
+        if (!conn_open(&conn)) return false;
+        conn_up = true;
+    }
 
     /* The port comes off when it is the scheme's own, which is what every
      * other client sends and what a proxy matching on the name expects. */
@@ -312,45 +353,79 @@ static bool http_post(const char * path, const char * content_type,
              "Content-Type: %s\r\n"
              "Content-Length: %zu\r\n"
              "Accept: */*\r\n"
-             "Connection: close\r\n"
+             "Connection: keep-alive\r\n"
              "\r\n",
              path, host_header, auth, content_type, body_len);
 
     if (!conn_send(&conn, head, strlen(head)) || !conn_send(&conn, body, body_len)) {
-        SDL_Log("voice: sending to %s failed", path);
-        conn_close(&conn);
+        *dead = true;
         return false;
     }
 
-    /* Connection: close, so the reply ends at end of file and there is no
-     * chunked framing to unpick. */
+    /* Headers first, then exactly the body they announce. */
     for (waited = 0; waited < VOICE_HTTP_TIMEOUT_S; ) {
         char chunk[8192];
-        int got = conn_recv(&conn, chunk, sizeof(chunk));
-        if (got == 0) break;
-        if (got == CONN_BROKEN) goto done;
+        int got;
+
+        if (header_len == 0 && (header_len = headers_end(&raw)) != 0) {
+            if (sscanf(raw.data, "HTTP/%*d.%*d %d", &status) != 1) {
+                SDL_Log("voice: %s answered something that is not HTTP", path);
+                goto done;
+            }
+            if (header_value(raw.data, "content-length", value, sizeof value)) {
+                sized = true;
+                want = strtoul(value, NULL, 10);
+            }
+            else if (header_value(raw.data, "transfer-encoding", value, sizeof value) &&
+                     strcasecmp(value, "chunked") == 0) {
+                chunked = true;
+            }
+            if (header_value(raw.data, "connection", value, sizeof value) &&
+                strcasecmp(value, "close") == 0) {
+                close_after = true;
+            }
+        }
+        if (header_len != 0) {
+            have = raw.len - header_len;
+            if (sized && have >= want) break;
+            if (chunked && have >= 5 && memcmp(raw.data + raw.len - 5, "0\r\n\r\n", 5) == 0) break;
+        }
+
+        got = conn_recv(&conn, chunk, sizeof(chunk));
+        if (got == 0) {
+            /* End of file. The ordinary end of a reply that announced no
+             * length; before a status, a dropped keep-alive. */
+            if (header_len == 0) *dead = true;
+            close_after = true;
+            break;
+        }
+        if (got == CONN_BROKEN) {
+            if (header_len == 0) *dead = true;
+            close_after = true;
+            goto done;
+        }
         if (got == CONN_AGAIN) {
             /* Nothing yet. Go round, unless the window has been closed — this
              * is the only place a request in flight can be abandoned. */
             waited += VOICE_RECV_TIMEOUT_S;
-            if (cancelled != NULL && cancelled()) goto done;
+            if (cancelled != NULL && cancelled()) {
+                close_after = true;
+                goto done;
+            }
             continue;
         }
         if (!voice_buf_add(&raw, chunk, (size_t) got)) goto done;
     }
     if (waited >= VOICE_HTTP_TIMEOUT_S) {
         SDL_Log("voice: %s gave up after %d s", path, VOICE_HTTP_TIMEOUT_S);
+        close_after = true;
         goto done;
     }
+    if (header_len == 0) goto done;
 
-    if (raw.len < 12 || sscanf(raw.data, "HTTP/%*d.%*d %d", &status) != 1) {
-        SDL_Log("voice: %s answered something that is not HTTP", path);
-        goto done;
-    }
-
-    split = strstr(raw.data, "\r\n\r\n");
-    if (split == NULL) goto done;
-    header_len = (size_t) (split - raw.data) + 4;
+    have = raw.len - header_len;
+    if (chunked) have = dechunk(raw.data + header_len, have);
+    else if (sized && have > want) have = want;
 
     if (status != 200) {
         SDL_Log("voice: %s: HTTP %d: %.200s", path, status, raw.data + header_len);
@@ -360,23 +435,44 @@ static bool http_post(const char * path, const char * content_type,
         goto done;
     }
 
-    /* Content-Length when it is there, the rest of the stream when it is
-     * not. All three services send one. */
-    want = raw.len - header_len;
-    if (header_value(raw.data, "content-length", length_header, sizeof(length_header))) {
-        size_t claimed = strtoul(length_header, NULL, 10);
-        if (claimed < want) want = claimed;
-    }
     if (mime != NULL && !header_value(raw.data, "content-type", mime, mime_cap)) {
         mime[0] = '\0';
     }
-
-    ok = voice_buf_add(out, raw.data + header_len, want);
+    ok = voice_buf_add(out, raw.data + header_len, have);
 
 done:
-    conn_close(&conn);
+    if (close_after || !ok) {
+        /* Either the server said so, or the reply was not read to its end
+         * and the next request would start in the middle of this one. */
+        conn_close(&conn);
+        conn_up = false;
+    }
     voice_buf_free(&raw);
     return ok;
+}
+
+/* POSTs body to path and returns the reply body in out, with its content type
+ * in mime. Reports the server's own status and the head of its message on a
+ * failure: it is the fastest route to the cause, and all three services answer
+ * a bad request with a sentence saying what was wrong. Twice at most: once
+ * over the connection in hand, and once more over a fresh one when the first
+ * died without a status, which is what a keep-alive the server has since
+ * dropped looks like. */
+static bool http_post(const char * path, const char * content_type,
+                      const void * body, size_t body_len,
+                      voice_buf_t * out, char * mime, size_t mime_cap)
+{
+    bool dead;
+    int attempt;
+
+    for (attempt = 0; attempt < 2; attempt++) {
+        bool reused = conn_up;
+        if (post_once(path, content_type, body, body_len, out, mime, mime_cap, &dead)) return true;
+        voice_buf_free(out);
+        if (!dead || !reused) break;
+    }
+    if (dead) SDL_Log("voice: sending to %s failed", path);
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -659,6 +755,8 @@ bool speech_start(void)
 
 void speech_stop(void)
 {
+    conn_close(&conn);
+    conn_up = false;
     voice_free(ref_audio);
     free(ref_text);
     ref_audio = ref_text = NULL;

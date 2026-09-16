@@ -240,7 +240,8 @@ const char * voice_wake_at(size_t i);
  */
 const char * voice_after_wake(const char * heard);
 
-/** True when the whole transcript is one of the goodbyes. */
+/** True when the whole transcript is one of the goodbyes, on its own or
+ * followed by nothing but the assistant's name: "Tschüss, Kai." */
 bool voice_is_goodbye(const char * heard);
 
 /* ------------------------------------------------------------------ */

@@ -86,6 +86,12 @@ target_link_libraries(kai_bench PRIVATE kai_turn PkgConfig::SDL2 PkgConfig::OPEN
 add_executable(kai_test host/test_ui.c)
 target_link_libraries(kai_test PRIVATE kai_ui PkgConfig::SDL2)
 
+# The words in voice/turn.c — what wakes the watch and what puts it back —
+# checked with no server and no microphone. Links kai_turn alone, which is
+# that file's claim about itself: nothing but libc underneath.
+add_executable(kai_turn_test host/test_turn.c)
+target_link_libraries(kai_turn_test PRIVATE kai_turn)
+
 # Renders the same two faces into frames for the README's animation, which
 # tools/gen_demo.py turns into a GIF. Built with everything else rather than
 # on demand so that a UI change cannot leave it behind: it links the same

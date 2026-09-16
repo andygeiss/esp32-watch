@@ -20,6 +20,7 @@
 #include "es8311_codec.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -189,16 +190,43 @@ lv_display_t * board_display_init(void)
     return display;
 }
 
-/* One finger is all this UI asks for: a button, and later a face to tap. */
+/* The controller's INT line, as a flag the read callback consumes. The
+ * driver's ISR runs on the edge and does nothing else. */
+static volatile bool touch_pending;
+
+static void IRAM_ATTR touch_interrupt(esp_lcd_touch_handle_t touch)
+{
+    (void) touch;
+    touch_pending = true;
+}
+
+/* One finger is all this UI asks for: a button, and later a face to tap.
+ *
+ * The chip is read only after its INT line has fired, or while the last read
+ * still had a finger down. Polled blind at LVGL's 30 ms, the first run on
+ * hardware logged an I2C NACK from it every half minute or so with nothing
+ * touching the glass — the FT5x06 idles into a slower scan and does not
+ * always answer while it is there. An idle chip that is never addressed
+ * cannot fail to answer, and the bus, which the two codecs share, is quiet
+ * between touches. Whichever interrupt mode the chip is in, a touch-down is
+ * an edge, and from then on the read itself says when the finger has gone. */
 static void touch_read(lv_indev_t * indev, lv_indev_data_t * data)
 {
     esp_lcd_touch_handle_t touch = lv_indev_get_user_data(indev);
     esp_lcd_touch_point_data_t point = { 0 };
+    static bool down;
     uint8_t count = 0;
+
+    if (!touch_pending && !down) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+    touch_pending = false;
 
     esp_lcd_touch_read_data(touch);
 
-    if (esp_lcd_touch_get_data(touch, &point, &count, 1) == ESP_OK && count > 0) {
+    down = esp_lcd_touch_get_data(touch, &point, &count, 1) == ESP_OK && count > 0;
+    if (down) {
         data->point.x = point.x;
         data->point.y = point.y;
         data->state = LV_INDEV_STATE_PRESSED;
@@ -231,6 +259,7 @@ lv_indev_t * board_touch_init(lv_display_t * display)
         .rst_gpio_num = BOARD_TOUCH_RST,
         .int_gpio_num = BOARD_TOUCH_INT,
         .levels = { .reset = 0, .interrupt = 0 },
+        .interrupt_callback = touch_interrupt,
     };
     esp_lcd_touch_handle_t touch = NULL;
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft5x06(io, &touch_config, &touch));

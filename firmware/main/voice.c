@@ -118,9 +118,13 @@ static void psram_release(void * block)
 static const voice_alloc_t PSRAM = { psram_grow, psram_release };
 
 /* ------------------------------------------------------------------ */
-/* HTTP. One connection per request, the same as the host's socket: a turn    */
-/* makes three requests seconds apart, so keeping one alive would be          */
-/* bookkeeping for nothing.                                                   */
+/* HTTP. One connection, kept open across the three requests of a turn and   */
+/* the turns after it. It was one connection per request, on the grounds     */
+/* that three requests seconds apart made a pool bookkeeping for nothing —    */
+/* and the first turn on hardware showed three TLS handshakes a turn in the   */
+/* log, each a certificate chain checked on a 240 MHz core. The host keeps    */
+/* its socket the same way. A connection the server has since dropped shows   */
+/* up as a failed send or an empty reply, and is opened again once.           */
 /* ------------------------------------------------------------------ */
 
 /* The server, and what it wants to see. Parsed once, at start-up, by the same
@@ -128,29 +132,24 @@ static const voice_alloc_t PSRAM = { psram_grow, psram_release };
  * here and is written down the same way. */
 static voice_url_t server;
 
-/* POSTs body to path and reads the whole reply into out. Reports the server's
- * own status on a failure — all three services answer a bad request with a
- * sentence saying what was wrong, and it is the fastest route to the cause. */
-static bool http_post(const char * path, const char * content_type,
-                      const void * body, size_t body_len, voice_buf_t * out)
-{
-    char url[VOICE_HOST_BYTES + 64];
-    char auth[VOICE_KEY_BYTES + 8];
-    esp_http_client_handle_t client;
-    esp_http_client_config_t config = { 0 };
-    int status, written;
-    int64_t length;
-    bool ok = false;
+/* The one client, made on the first request and kept until the loop ends.
+ * Only the voice task touches it. */
+static esp_http_client_handle_t client;
 
-    /* Built from the parsed parts rather than pasted onto the configured
-     * string: a trailing slash or a path someone left on the address cannot
-     * turn into a 404 that way, and the port is always the one turn.c settled
-     * on. */
-    snprintf(url, sizeof(url), "%s://%s:%s%s",
-             server.tls ? "https" : "http", server.host, server.port, path);
-    config.url = url;
+static bool client_open(void)
+{
+    esp_http_client_config_t config = { 0 };
+    static char auth[VOICE_KEY_BYTES + 8];
+    char base[VOICE_HOST_BYTES + 32];
+
+    if (client != NULL) return true;
+
+    snprintf(base, sizeof base, "%s://%s:%s/",
+             server.tls ? "https" : "http", server.host, server.port);
+    config.url = base;
     config.method = HTTP_METHOD_POST;
     config.timeout_ms = VOICE_HTTP_TIMEOUT_MS;
+    config.keep_alive_enable = true;
     /* The certificate bundle ESP-IDF already compiles in — sdkconfig has
      * CONFIG_MBEDTLS_CERTIFICATE_BUNDLE on. Without this an https address
      * fails the handshake with nothing but "esp-tls" in the log. */
@@ -159,37 +158,65 @@ static bool http_post(const char * path, const char * content_type,
     client = esp_http_client_init(&config);
     if (client == NULL) return false;
 
-    esp_http_client_set_header(client, "Content-Type", content_type);
-
     /* No key, no header: an "Authorization: Bearer " with nothing behind it
      * is a rejected request rather than an unauthenticated one. */
     if (WATCH_VOICE_KEY[0] != '\0') {
         snprintf(auth, sizeof auth, "Bearer %s", WATCH_VOICE_KEY);
         esp_http_client_set_header(client, "Authorization", auth);
     }
+    return true;
+}
+
+static void client_drop(void)
+{
+    if (client == NULL) return;
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    client = NULL;
+}
+
+/* One attempt over whatever connection the client holds. `dead` comes back
+ * true when the connection itself failed before a status arrived — the case a
+ * server that dropped an idle keep-alive produces — and false for everything
+ * the server actually answered. */
+static bool post_once(const char * url, const char * path, const char * content_type,
+                      const void * body, size_t body_len, voice_buf_t * out, bool * dead)
+{
+    int status, written;
+    int64_t length;
+
+    *dead = false;
+    esp_http_client_set_url(client, url);
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", content_type);
 
     if (esp_http_client_open(client, (int) body_len) != ESP_OK) {
-        ESP_LOGE(TAG, "%s is not answering — is the server up and reachable?", url);
-        goto done;
+        *dead = true;
+        return false;
     }
 
     written = esp_http_client_write(client, body, (int) body_len);
     if (written < 0 || (size_t) written != body_len) {
-        ESP_LOGE(TAG, "sending to %s failed", path);
-        goto done;
+        *dead = true;
+        return false;
     }
 
     length = esp_http_client_fetch_headers(client);
     status = esp_http_client_get_status_code(client);
+    if (length < 0 || status == 0) {
+        *dead = true;
+        return false;
+    }
 
     /* Read to the end whatever the status: the body of a failure is the
-     * message that says why, and it goes in the log below. */
+     * message that says why, and it goes in the log below. Reading all of it
+     * is also what leaves the connection clean for the next request. */
     for (;;) {
         char chunk[2048];
         int got = esp_http_client_read(client, chunk, sizeof(chunk));
         if (got <= 0) break;
-        if (!voice_buf_add(out, chunk, (size_t) got)) goto done;
-        if (!atomic_load(&running)) goto done;
+        if (!voice_buf_add(out, chunk, (size_t) got)) return false;
+        if (!atomic_load(&running)) return false;
         if (length > 0 && (int64_t) out->len >= length) break;
     }
 
@@ -200,14 +227,47 @@ static bool http_post(const char * path, const char * content_type,
             ESP_LOGE(TAG, "the server wants a key — set WATCH_VOICE_KEY in .env");
         }
         voice_buf_free(out);
-        goto done;
+        return false;
     }
-    ok = out->len > 0;
+    return out->len > 0;
+}
 
-done:
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    return ok;
+/* POSTs body to path and reads the whole reply into out. Reports the server's
+ * own status on a failure — all three services answer a bad request with a
+ * sentence saying what was wrong, and it is the fastest route to the cause. */
+static bool http_post(const char * path, const char * content_type,
+                      const void * body, size_t body_len, voice_buf_t * out)
+{
+    char url[VOICE_HOST_BYTES + 64];
+    bool dead, ok;
+    int attempt;
+
+    /* Built from the parsed parts rather than pasted onto the configured
+     * string: a trailing slash or a path someone left on the address cannot
+     * turn into a 404 that way, and the port is always the one turn.c settled
+     * on. */
+    snprintf(url, sizeof(url), "%s://%s:%s%s",
+             server.tls ? "https" : "http", server.host, server.port, path);
+
+    /* Twice at most: once over the connection in hand, and once more over a
+     * fresh one when the first attempt died without a status, which is what
+     * a keep-alive the server has since dropped looks like. */
+    for (attempt = 0; attempt < 2; attempt++) {
+        if (!client_open()) return false;
+        ok = post_once(url, path, content_type, body, body_len, out, &dead);
+        if (ok) return true;
+        voice_buf_free(out);
+        if (!dead) {
+            /* Answered, and the answer was no. The connection may be half
+             * way through a body: start the next one clean. */
+            esp_http_client_close(client);
+            return false;
+        }
+        client_drop();
+        if (attempt == 0 && atomic_load(&running)) continue;
+        ESP_LOGE(TAG, "%s is not answering — is the server up and reachable?", url);
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -506,6 +566,7 @@ static void loop(void * unused)
 
     board_mic_close();
     board_speaker_close();
+    client_drop();
     worker = NULL;
     vTaskDelete(NULL);
 }
@@ -537,7 +598,7 @@ static bool load_voice(void)
     memcpy(ref_text, words_start, words_len);
     ref_text[words_len] = '\0';
 
-    ESP_LOGI(TAG, "the voice to borrow is %u bytes of opus", (unsigned) clip_len);
+    ESP_LOGI(TAG, "the voice to borrow is %u bytes of WAV", (unsigned) clip_len);
     return true;
 #else
     ESP_LOGW(TAG, "built without voices/female.wav — the assistant stays asleep");

@@ -353,10 +353,13 @@ static const char * const WAKE[] = {
     "hey kai", "hey kay", "hey ky", "hey chai", "hei kai", "hi kai",
 };
 
-/* Said on its own, this ends the session. Whole transcripts rather than
- * substrings: "stopp mal die Musik" is something to answer, not an
- * instruction to go away. tschüss/tschüs and stop/stopp are one word each:
- * the transcriber picks a spelling and there is no telling which. */
+/* Said on its own, or followed by nothing but the assistant's name, this
+ * ends the session. Whole transcripts rather than substrings: "stopp mal die
+ * Musik" is something to answer, not an instruction to go away. The name is
+ * allowed because "Tschüss, Lizzie" is how anyone says goodbye to something
+ * that has one — the first turn on hardware said exactly that and was
+ * answered rather than obeyed. tschüss/tschüs and stop/stopp are one word
+ * each: the transcriber picks a spelling and there is no telling which. */
 static const char * const GOODBYE[] = {
     "tschüss", "tschüs", "quit", "stop", "stopp",
 };
@@ -529,6 +532,34 @@ const char * voice_after_wake(const char * heard)
     return heard;
 }
 
+/* True when `heard` is `word` and then either nothing or the assistant's own
+ * name, with the transcriber's punctuation around either. The name is matched
+ * as a whole word, case-blind: "tschüss Kaiser" is not a goodbye to Kai. */
+static bool is_word_then_name(const char * heard, size_t len, const char * word)
+{
+    size_t word_len = strlen(word);
+    const char * name = assistant_name;
+    size_t name_len = strlen(name);
+    size_t i;
+
+    if (len < word_len || !same_folded(heard, word, word_len)) return false;
+    heard += word_len;
+    len -= word_len;
+    if (len == 0) return true;
+
+    /* A separator has to follow the word, or "stopper" starts with "stop". */
+    if (*heard != ' ' && *heard != ',' && *heard != '.' && *heard != '!') return false;
+    while (len > 0 && (*heard == ' ' || *heard == ',' || *heard == '.' || *heard == '!')) {
+        heard++;
+        len--;
+    }
+    if (len != name_len) return false;
+    for (i = 0; i < len; i++) {
+        if (tolower((unsigned char) heard[i]) != tolower((unsigned char) name[i])) return false;
+    }
+    return true;
+}
+
 bool voice_is_goodbye(const char * heard)
 {
     size_t len, i;
@@ -540,7 +571,7 @@ bool voice_is_goodbye(const char * heard)
     }
 
     for (i = 0; i < VOICE_COUNT(GOODBYE); i++) {
-        if (strlen(GOODBYE[i]) == len && same_folded(heard, GOODBYE[i], len)) return true;
+        if (is_word_then_name(heard, len, GOODBYE[i])) return true;
     }
     return false;
 }
