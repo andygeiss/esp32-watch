@@ -240,8 +240,10 @@ const char * voice_wake_at(size_t i);
  */
 const char * voice_after_wake(const char * heard);
 
-/** True when the whole transcript is one of the goodbyes, on its own or
- * followed by nothing but the assistant's name: "Tschüss, Kai." */
+/** True when the transcript is a goodbye and nothing more: a goodbye word,
+ * with at most the assistant's name — as configured, or as any wake spelling
+ * ends — and the small change around it: "Tschüss, Kai.", "Danke, tschüss",
+ * "Ok, bis später Lizzie". A sentence with a goodbye in it is not one. */
 bool voice_is_goodbye(const char * heard);
 
 /* ------------------------------------------------------------------ */

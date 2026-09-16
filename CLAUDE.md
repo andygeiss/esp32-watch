@@ -878,13 +878,22 @@ sends what it hears.
 **Two ways back to the clock, because a misheard word must not trap you.** A
 goodbye — `tschüss`, `quit`, `stop` — matched against the whole transcript
 rather than as a substring, so *stopp mal die Musik* is a thing to answer; and
-`VOICE_IDLE_MS`, 30 s with nothing said, which needs no word at all. The
-goodbye may be followed by the assistant's name and nothing else, because
-*Tschüss, Lizzie* is how anyone says goodbye to something with a name: the
-first turn on hardware said exactly that and was answered rather than obeyed,
-and the watch then spent 30 s answering the room. `host/test_turn.c` holds
-that case and the ones it must not open — *tschüss sagen wir später*,
-*tschüss Kaiser* — and `make check` runs it.
+`VOICE_IDLE_MS`, 30 s with nothing said, which needs no word at all.
+
+**A goodbye is a goodbye word, the name or nothing, and the small change
+people put around either.** *Tschüss, Lizzie*, *Danke, tschüss*, *Ok, bis
+später Kai*, *Auf Wiedersehen*: every word of the transcript has to be one
+of those three kinds, at most five of them, or it is something to answer.
+The first turn on hardware said *Tschüss, Lizzie* and was answered rather
+than obeyed, because the rule then wanted the word alone; a second evening
+on the wrist could not get out at all, and the watch was off its cable so
+nobody could read what the transcriber had written. The name is matched the
+way the wake is — the configured name and the tail of every wake spelling —
+because the transcriber writes a name it has never been shown a few
+different ways, and a goodbye it cannot spell is a watch that cannot be put
+to sleep. `host/test_turn.c` holds all of it, the cases that must open the
+door and the ones that must not — *stopp mal die Musik*, *tschüss sagen wir
+später*, *tschüss Kaiser* — and `make check` runs it.
 `record()` takes that as a deadline on the silence *before* the first word,
 and `VOICE_WAIT_FOREVER` is the same function asleep, where there is nothing
 to time out of.

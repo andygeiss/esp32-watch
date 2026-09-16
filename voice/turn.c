@@ -353,32 +353,34 @@ static const char * const WAKE[] = {
     "hey kai", "hey kay", "hey ky", "hey chai", "hei kai", "hi kai",
 };
 
-/* Said on its own, or followed by nothing but the assistant's name, this
- * ends the session. Whole transcripts rather than substrings: "stopp mal die
- * Musik" is something to answer, not an instruction to go away. The name is
- * allowed because "Tschüss, Lizzie" is how anyone says goodbye to something
- * that has one — the first turn on hardware said exactly that and was
- * answered rather than obeyed. tschüss/tschüs and stop/stopp are one word
- * each: the transcriber picks a spelling and there is no telling which. */
+/* A goodbye is a short transcript made of a goodbye word, the assistant's
+ * name or nothing, and the small change people put around either — "Danke,
+ * tschüss", "Ok, bis später Lizzie", "Auf Wiedersehen". Every word has to be
+ * one of those three kinds: "stopp mal die Musik" is something to answer,
+ * not an instruction to go away, and so is "tschüss sagen wir später". The
+ * name is matched the way the wake is — the configured name and the tail of
+ * every wake spelling — because the transcriber writes a name it has never
+ * been shown a few different ways, and a goodbye it cannot spell is a watch
+ * that cannot be put to sleep. Whole words, case-blind; the transcriber's
+ * punctuation is skipped over. tschüss/tschüs and stop/stopp are here as
+ * separate words because the transcriber picks a spelling and there is no
+ * telling which. */
 static const char * const GOODBYE[] = {
-    "tschüss", "tschüs", "quit", "stop", "stopp",
+    "tschüss", "tschüs", "tschüssi", "ciao", "bye", "goodbye",
+    "wiedersehen", "später", "bald", "nacht", "quit", "stop", "stopp",
 };
 
+/* What may stand beside the word and the name without making it a sentence.
+ * "bis" and "gute" are here and "später", "bald" and "nacht" above, which is
+ * how "bis später" and "gute Nacht" are goodbyes without a phrase table. */
+static const char * const FILLER[] = {
+    "ok", "okay", "danke", "dank", "vielen", "dann", "bis", "und", "auf",
+    "gute", "gut", "dir", "schön", "alles", "liebe",
+};
+
+#define GOODBYE_MAX_WORDS 5
+
 #define VOICE_COUNT(a) (sizeof(a) / sizeof((a)[0]))
-
-/* True when the n bytes at `a` are `b`, comparing case-blind. Only ASCII
- * folds: the ü of tschüss is two bytes above 127 and comes through untouched,
- * which is what the tables above are written for. `b` is already lower case —
- * every phrase in this file and every phrase voice_wake_set() cleaned is. */
-static bool same_folded(const char * a, const char * b, size_t n)
-{
-    size_t i;
-
-    for (i = 0; i < n; i++) {
-        if ((char) tolower((unsigned char) a[i]) != b[i]) return false;
-    }
-    return true;
-}
 
 /* The configured spellings, cleaned, laid end to end in one static buffer.
  * Empty means WAKE above: the default is written down once, and a platform
@@ -532,48 +534,72 @@ const char * voice_after_wake(const char * heard)
     return heard;
 }
 
-/* True when `heard` is `word` and then either nothing or the assistant's own
- * name, with the transcriber's punctuation around either. The name is matched
- * as a whole word, case-blind: "tschüss Kaiser" is not a goodbye to Kai. */
-static bool is_word_then_name(const char * heard, size_t len, const char * word)
+/* True when the n bytes at `a` are the whole of `word`, comparing case-blind
+ * on both sides — the name is configured with whatever capitals it came with.
+ * Only ASCII folds: the ü of tschüss is two bytes above 127 and comes through
+ * untouched, which is what the tables above are written for. */
+static bool word_is(const char * a, size_t n, const char * word)
 {
-    size_t word_len = strlen(word);
-    const char * name = assistant_name;
-    size_t name_len = strlen(name);
     size_t i;
-
-    if (len < word_len || !same_folded(heard, word, word_len)) return false;
-    heard += word_len;
-    len -= word_len;
-    if (len == 0) return true;
-
-    /* A separator has to follow the word, or "stopper" starts with "stop". */
-    if (*heard != ' ' && *heard != ',' && *heard != '.' && *heard != '!') return false;
-    while (len > 0 && (*heard == ' ' || *heard == ',' || *heard == '.' || *heard == '!')) {
-        heard++;
-        len--;
-    }
-    if (len != name_len) return false;
-    for (i = 0; i < len; i++) {
-        if (tolower((unsigned char) heard[i]) != tolower((unsigned char) name[i])) return false;
+    if (strlen(word) != n) return false;
+    for (i = 0; i < n; i++) {
+        if (tolower((unsigned char) a[i]) != tolower((unsigned char) word[i])) return false;
     }
     return true;
 }
 
-bool voice_is_goodbye(const char * heard)
+static bool is_separator(char c)
 {
-    size_t len, i;
+    return c == ' ' || c == ',' || c == '.' || c == '!' || c == '?' ||
+           c == ';' || c == ':' || c == '"' || c == '\'';
+}
 
-    while (*heard == ' ') heard++;
-    for (len = strlen(heard); len > 0; len--) {
-        char c = heard[len - 1];
-        if (c != ' ' && c != ',' && c != '.' && c != '!' && c != '?') break;
-    }
+/* The name, as configured or as any wake spelling ends: "hey lissi" makes
+ * "lissi" a name, so that "Tschüss, Lissi" ends the session for a watch the
+ * transcriber spells that way. */
+static bool word_is_name(const char * a, size_t n)
+{
+    size_t j;
 
-    for (i = 0; i < VOICE_COUNT(GOODBYE); i++) {
-        if (is_word_then_name(heard, len, GOODBYE[i])) return true;
+    if (word_is(a, n, assistant_name)) return true;
+    for (j = 0; j < voice_wake_count(); j++) {
+        const char * tail = strchr(voice_wake_at(j), ' ');
+        if (tail != NULL && word_is(a, n, tail + 1)) return true;
     }
     return false;
+}
+
+static bool word_in(const char * a, size_t n, const char * const * table, size_t count)
+{
+    size_t i;
+    for (i = 0; i < count; i++) {
+        if (word_is(a, n, table[i])) return true;
+    }
+    return false;
+}
+
+bool voice_is_goodbye(const char * heard)
+{
+    size_t words = 0;
+    bool   goodbye = false;
+
+    while (*heard != '\0') {
+        const char * start;
+        size_t n;
+
+        while (*heard != '\0' && is_separator(*heard)) heard++;
+        if (*heard == '\0') break;
+        start = heard;
+        while (*heard != '\0' && !is_separator(*heard)) heard++;
+        n = (size_t) (heard - start);
+
+        if (++words > GOODBYE_MAX_WORDS) return false;
+        if (word_in(start, n, GOODBYE, VOICE_COUNT(GOODBYE))) goodbye = true;
+        else if (word_is_name(start, n)) continue;
+        else if (word_in(start, n, FILLER, VOICE_COUNT(FILLER))) continue;
+        else return false;
+    }
+    return goodbye;
 }
 
 /* ------------------------------------------------------------------ */

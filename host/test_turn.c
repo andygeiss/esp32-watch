@@ -50,15 +50,32 @@ static void goodbye_checks(void)
     CHECK(voice_is_goodbye("Tschüss, Kai."), "the word and the default name");
     CHECK(!voice_is_goodbye("Tschüss, Lizzie."), "the old name no longer ends it");
 
-    /* Anything more is something to answer. The name check is exact: a
-     * goodbye that accepted any trailing word would turn "stopp mal die
-     * Musik" back into an exit, which is the substring rule this was written
-     * to avoid. */
+    /* The small change people put around a goodbye, and the name first as
+     * well as last. The first goodbye said to the hardware that was not
+     * understood came dressed like this. */
+    CHECK(voice_is_goodbye("Kai, tschüss"), "the name first");
+    CHECK(voice_is_goodbye("Danke, tschüss!"), "thanks in front");
+    CHECK(voice_is_goodbye("Ok, bis später, Kai."), "bis später and the name");
+    CHECK(voice_is_goodbye("Auf Wiedersehen."), "two words of goodbye");
+    CHECK(voice_is_goodbye("Gute Nacht, Kai"), "good night");
+
+    /* The name as the transcriber spells it: any wake spelling's tail is a
+     * name too, or a watch that wakes to "hey lissi" cannot be told
+     * "tschüss, Lissi". */
+    CHECK(voice_wake_set("hey lizzie|hey lissi|hey lizzy"), "three spellings");
+    CHECK(voice_is_goodbye("Tschüss, Lissi."), "a wake spelling's name");
+    CHECK(voice_is_goodbye("Tschüss Lizzy!"), "another");
+    CHECK(voice_wake_set(""), "back to the built-in list");
+
+    /* Anything more is something to answer: a goodbye that accepted any
+     * other word would turn "stopp mal die Musik" back into an exit, which
+     * is the substring rule this was written to avoid. */
     CHECK(!voice_is_goodbye("stopp mal die Musik"), "a sentence starting with a goodbye");
     CHECK(!voice_is_goodbye("tschüss sagen wir später"), "a goodbye with words after");
-    CHECK(!voice_is_goodbye("Kai, tschüss"), "the name first");
     CHECK(!voice_is_goodbye("tschüss Kaiser"), "the name as a prefix of another word");
     CHECK(!voice_is_goodbye("stopper"), "the word as a prefix of another word");
+    CHECK(!voice_is_goodbye("Danke dir, alles gut"), "filler with no goodbye in it");
+    CHECK(!voice_is_goodbye("ok danke bis dann tschüss und gute nacht"), "too many words to be a goodbye");
     CHECK(!voice_is_goodbye(""), "nothing at all");
 }
 
