@@ -116,10 +116,10 @@ static void wake_tick(lv_timer_t * timer)
 /* What this board can answer: all of it, now.
  *
  * The radio is real, the microphone and the speaker are voice.c's ES7210 and
- * ES8311, and the charge is the AXP2101's own gauge — read once a second,
- * three bytes over I2C. With no gauge found, or no battery on it, the reading
- * stays negative and the corner reads `--%`, which is the honest answer and
- * one the UI already draws. None of it reaches into ui.c. That is the point
+ * ES8311, and the charge is the battery's voltage off the AXP2101 — read once
+ * a second, four bytes over I2C. With no power chip found, or no battery on
+ * it, the reading stays negative and the corner reads `--%`, which is the
+ * honest answer and one the UI already draws. None of it reaches into ui.c. That is the point
  * of the struct. */
 static void status_tick(lv_timer_t * timer)
 {

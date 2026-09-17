@@ -23,6 +23,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -490,12 +491,22 @@ void board_speaker_close(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Power. The AXP2101 at 0x34: it charges the LiPo, measures it, and keeps a  */
-/* coulomb-counting gauge that answers in percent. Five registers, read by    */
-/* hand — a driver for the whole chip would be a page of regulators this      */
-/* board has already set up for itself by the time this code runs. The       */
-/* numbers are from the chip's own map, checked against XPowersLib's use of  */
-/* them, and they describe one chip on one board.                            */
+/* Power. The AXP2101 at 0x34: it charges the LiPo and measures it. Four     */
+/* registers, read by hand — a driver for the whole chip would be a page of   */
+/* regulators this board has already set up for itself by the time this code */
+/* runs. The numbers are from the chip's own map, checked against            */
+/* XPowersLib's use of them, and they describe one chip on one board.        */
+/*                                                                            */
+/* The chip keeps a percentage gauge too, at 0xA4, and it is not read. Nobody */
+/* hands it this battery's model, so it guesses: it said 100% at 4109 mV on   */
+/* one boot and 5% at 4205 mV on another, and the corner read 0% on a watch   */
+/* that ran on for hours. The charge comes from the voltage instead.          */
+/*                                                                            */
+/* On the charger the voltage is the charger's, not the cell's: it held      */
+/* 4206 mV on a cell that read 4140 mV with the charger paused. So while it  */
+/* charges, the charger is paused once a minute and the cell read after      */
+/* CHARGE_SETTLE_MS — measured: the ADC updates about once a second, and the */
+/* first update after the pause is already within 7 mV of eight seconds on.  */
 /* ------------------------------------------------------------------ */
 
 #define AXP2101_ADDR        0x34
@@ -504,8 +515,11 @@ void board_speaker_close(void)
 #define AXP2101_IC_TYPE     0x03  /* reads 0x4A on an AXP2101 */
 #define AXP2101_ADC_ENABLE  0x30  /* bit 0: measure the battery voltage */
 #define AXP2101_VBAT_H      0x34  /* 5 bits, then the byte after it, in mV */
-#define AXP2101_BAT_PERCENT 0xA4
+#define AXP2101_CHARGE_CTRL 0x18  /* bit 1: charge the cell */
 #define AXP2101_ID          0x4A
+
+#define CHARGE_SAMPLE_MS    60000  /* how often the charger is paused to read the cell */
+#define CHARGE_SETTLE_MS    2500   /* how long it stays paused before the reading */
 
 static i2c_master_dev_handle_t pmu;
 
@@ -527,7 +541,7 @@ bool board_battery_init(void)
         .device_address = AXP2101_ADDR,
         .scl_speed_hz = 100000,
     };
-    uint8_t id = 0, adc = 0, mv[2] = { 0, 0 }, status1 = 0, status2 = 0;
+    uint8_t id = 0, adc = 0, ctl = 0, mv[2] = { 0, 0 }, status1 = 0, status2 = 0;
     bool charging;
     int pct;
 
@@ -549,32 +563,103 @@ bool board_battery_init(void)
      * the register is what the chip already chose for itself. */
     if (pmu_read(AXP2101_ADC_ENABLE, &adc, 1)) pmu_write(AXP2101_ADC_ENABLE, adc | 0x01);
 
-    pct = board_battery_read(&charging);
+    /* The chip outlives the ESP32 on the battery, so a reset in the middle
+     * of a pause below would leave the cell never charging again. */
+    if (pmu_read(AXP2101_CHARGE_CTRL, &ctl, 1)) pmu_write(AXP2101_CHARGE_CTRL, ctl | 0x02);
+
+    /* The state first: on the charger, the read below pauses it. */
     pmu_read(AXP2101_VBAT_H, mv, 2);
     pmu_read(AXP2101_STATUS1, &status1, 1);
     pmu_read(AXP2101_STATUS2, &status2, 1);
-    ESP_LOGI(TAG, "gauge up: %d%%, %u mV, %s", pct,
-             ((mv[0] & 0x1F) << 8) | mv[1],
-             pct < 0                ? "no battery"
-             : charging             ? "charging"
+    pct = board_battery_read(&charging);
+    ESP_LOGI(TAG, "power up: %u mV, %s", ((mv[0] & 0x1F) << 8) | mv[1],
+             !(status1 & 0x08)       ? "no battery"
+             : charging              ? "charging, the charge follows in a moment"
              : (status2 & 0x07) == 4 ? "charge done, on USB"
-             : (status1 & 0x20)     ? "on USB, not charging"
-                                    : "on the battery");
+             : (status1 & 0x20)      ? "on USB, not charging"
+                                     : "on the battery");
+    if (pct >= 0) ESP_LOGI(TAG, "charge %d%%", pct);
     return true;
 }
 
+/* A single-cell LiPo's resting voltage against its charge, the usual curve,
+ * read between the points. Coarser than a gauge that knows the cell, but it
+ * cannot be out by ninety percent. On the charger the voltage stands above
+ * the rest voltage, so the number runs ahead there until the charge ends. */
+static const struct { uint16_t mv; uint8_t pct; } LIPO[] = {
+    { 3300,   0 }, { 3610,   5 }, { 3690,  10 }, { 3730,  20 }, { 3770,  30 },
+    { 3800,  40 }, { 3840,  50 }, { 3870,  60 }, { 3950,  70 }, { 4020,  80 },
+    { 4110,  90 }, { 4200, 100 },
+};
+
+static int lipo_pct(int mv)
+{
+    size_t i;
+
+    if (mv <= LIPO[0].mv) return 0;
+    for (i = 1; i != sizeof LIPO / sizeof LIPO[0]; i++) {
+        if (mv < LIPO[i].mv) {
+            int lo = LIPO[i - 1].mv, hi = LIPO[i].mv;
+            return LIPO[i - 1].pct + (mv - lo) * (LIPO[i].pct - LIPO[i - 1].pct) / (hi - lo);
+        }
+    }
+    return 100;
+}
+
+static bool cell_mv(int * mv)
+{
+    uint8_t v[2];
+    if (!pmu_read(AXP2101_VBAT_H, v, 2)) return false;
+    *mv = ((v[0] & 0x1F) << 8) | v[1];
+    return true;
+}
+
+/* Off the charger the voltage is the cell's and is read as it stands. On it,
+ * the last paused reading is what is answered, and a new one is taken once a
+ * minute without ever blocking the caller: one call pauses the charger, a
+ * later one reads the cell and starts it again. Negative until the first
+ * paused reading lands, so the corner says `--%` for a moment rather than a
+ * number that is not the cell's. */
 int board_battery_read(bool * charging)
 {
-    uint8_t status1 = 0, status2 = 0, pct = 0;
+    static int held = -1;          /* the last reading with the charger paused */
+    static int64_t taken_ms;       /* when it was taken */
+    static int64_t paused_ms = -1; /* when the charger was paused, or -1 */
+    const int64_t now = esp_timer_get_time() / 1000;
+    uint8_t status1 = 0, status2 = 0, ctl = 0;
+    int mv;
 
     *charging = false;
     if (pmu == NULL) return -1;
     if (!pmu_read(AXP2101_STATUS1, &status1, 1) || !(status1 & 0x08)) return -1;
     if (!pmu_read(AXP2101_STATUS2, &status2, 1)) return -1;
-    if (!pmu_read(AXP2101_BAT_PERCENT, &pct, 1)) return -1;
+    if (!pmu_read(AXP2101_CHARGE_CTRL, &ctl, 1)) return -1;
 
-    *charging = (status2 >> 5) == 1;
-    return pct > 100 ? 100 : pct;
+    if (paused_ms >= 0) {
+        /* Paused by us, so the status says not charging. It is, for our
+         * purposes — and if the cable came out, the next call finds out. */
+        *charging = true;
+        if (now - paused_ms < CHARGE_SETTLE_MS) return held;
+        if (cell_mv(&mv)) {
+            held = lipo_pct(mv);
+            taken_ms = now;
+            ESP_LOGI(TAG, "charging: the cell reads %d mV with the charger paused, %d%%", mv, held);
+        }
+        pmu_write(AXP2101_CHARGE_CTRL, ctl | 0x02);
+        paused_ms = -1;
+        return held;
+    }
+
+    if ((status2 >> 5) != 1) {
+        held = -1;                 /* off the charger: the next charge starts fresh */
+        return cell_mv(&mv) ? lipo_pct(mv) : -1;
+    }
+
+    *charging = true;
+    if (held < 0 || now - taken_ms >= CHARGE_SAMPLE_MS) {
+        if (pmu_write(AXP2101_CHARGE_CTRL, ctl & ~0x02)) paused_ms = now;
+    }
+    return held;
 }
 
 /* ------------------------------------------------------------------ */

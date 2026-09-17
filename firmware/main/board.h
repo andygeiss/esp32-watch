@@ -80,16 +80,17 @@ bool board_motion_read(float g[3]);
 bool board_audio_init(void);
 
 /* ------------------------------------------------------------------ */
-/* Power. The AXP2101 charges the LiPo and runs a fuel gauge of its own, on   */
-/* the same I2C bus, so board_touch_init() has to have run first here too.    */
+/* Power. The AXP2101 charges the LiPo and measures its voltage, on the same  */
+/* I2C bus, so board_touch_init() has to have run first here too.             */
 /* ------------------------------------------------------------------ */
 
 /** Find the power chip and switch its battery ADC on. False if it is not
  * there, after which board_battery_read() answers "unknown" forever. */
 bool board_battery_init(void);
 
-/** The gauge's charge, 0-100, or negative when there is no gauge or no
- * battery on it; and whether the charger is currently putting charge in. */
+/** The charge, 0-100, from the battery's voltage, or negative when there is
+ * no power chip or no battery on it; and whether the charger is currently
+ * putting charge in. */
 int board_battery_read(bool * charging);
 
 /** Open the microphone at VOICE_RATE mono. Closes the speaker if it is open. */

@@ -382,7 +382,7 @@ The same `ui_status_t` the simulator fakes, filled from what is actually there:
 | | |
 |---|---|
 | `wifi_up` | real, from the station's `IP_EVENT_STA_GOT_IP` |
-| `battery_pct`, `charging` | real, from the AXP2101's own fuel gauge — see the power section below. `-1` when no gauge or no battery answers, which the UI already draws as `--%` |
+| `battery_pct`, `charging` | real, from the battery's voltage as the AXP2101 measures it — see the power section below. `-1` when no power chip or no battery answers, which the UI already draws as `--%` |
 | `listening`, `speaking` | real, from `voice.c` — the ES7210 in front of the microphones and the ES8311 in front of the speaker |
 
 Nothing is invented any more. None of it reaches into `ui.c`. That is the
@@ -396,21 +396,45 @@ simulator's does — see the voice loop below.
 
 An AXP2101 power management chip sits on the same I2C bus as the touch
 controller and the codecs, at 0x34. It charges the LiPo on the MX1.25
-connector, measures it with its own ADC and runs a coulomb-counting gauge
-that answers in percent. `board_battery_init()` finds it by its chip ID and
-switches the voltage ADC on; `board_battery_read()` is three bytes once a
-second from `status_tick()` — battery present, charger state, percentage —
-and no library, because a driver for the whole chip is a page of regulators
-this board has already set itself up with by the time `app_main` runs. The
-register numbers are the chip's own, checked against how XPowersLib uses
-them.
+connector and measures it with its own ADC. `board_battery_init()` finds it
+by its chip ID and switches the voltage ADC on; `board_battery_read()` is
+four bytes once a second from `status_tick()` — battery present, charger
+state, voltage — and no library, because a driver for the whole chip is a
+page of regulators this board has already set itself up with by the time
+`app_main` runs. The register numbers are the chip's own, checked against
+how XPowersLib uses them.
 
-Two things to know about the number. The gauge's percentage is only as good
-as its battery model, which is the chip's default: on the first run it said
-100% at 4109 mV, which a resting LiPo would call about ninety, so read the
-voltage the start-up line prints beside it before trusting a full reading.
-And the corner's charging bolt means the charger is putting charge in, so a
-full battery on USB reads 100% without it — `charge done, on USB` in the log.
+**The percentage is worked out from the voltage, not read off the chip's
+gauge.** The AXP2101 keeps a gauge that answers in percent, and it was what
+the corner showed at first. Nobody hands it this battery's model, so it
+guesses, and the guesses do not hold: 100% at 4109 mV on the first boot, 5%
+at 4205 mV — a full cell, on the charger — on 17 September 2026, and a
+corner reading 0% on a watch that ran on for hours before that. `LIPO[]` in
+`board.c` is the usual resting curve of a single LiPo cell, 3.3 V empty to
+4.2 V full, read between its points. It is coarser than a gauge that knows
+its cell and it cannot be out by ninety percent.
+
+**On the charger the voltage is the charger's, so the charger is paused to
+read the cell.** Charging, the ADC held 4206 mV — 100% by the table — on a
+cell that read 4140 mV, 93%, with the charger off; and the chip has no ADC
+for the charge current that would let the difference be worked out instead.
+So while it charges, `board_battery_read()` clears bit 1 of register `0x18`
+once a minute, reads the cell `CHARGE_SETTLE_MS` later and sets the bit
+again, and the corner holds that reading in between. Both halves happen in
+separate once-a-second calls, so the LVGL loop never waits on it. The 2.5 s
+is measured: the ADC updates about once a second, and its first update after
+the pause was within 7 mV of where the cell stood eight seconds on. It costs
+about four percent of the charging time. The corner says `--%` for those
+first 2.5 s after the cable goes in, which is the honest answer until there is
+one. Every paused reading is logged — `charging: the cell reads ... mV with
+the charger paused` — and `board_battery_init()` sets the bit
+unconditionally, because the chip outlives a reset of the ESP32 on the
+battery and a reset mid-pause would otherwise leave the cell never charging
+again.
+
+The corner's charging bolt means the charger is putting charge in, so a full
+battery on USB reads its voltage without it — `charge done, on USB` in the
+log.
 
 The same bus holds two more chips, both found by probing and both used
 now: a PCF85063 real-time clock at 0x51, powered from the battery through
