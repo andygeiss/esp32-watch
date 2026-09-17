@@ -266,7 +266,7 @@ else shared with the simulator:
 |---|---|
 | `firmware/main/main.c` | the device host layer — tick source, LVGL loop, `ui_status_set()`, `ui_view_set()`. The counterpart of `host/main.c`, and deliberately the same shape |
 | `firmware/main/board.c` | the QSPI panel and the touch controller handed to LVGL, and the two audio codecs handed to `voice.c` |
-| `firmware/main/net.c` | WiFi and SNTP, both off unless an SSID is configured |
+| `firmware/main/net.c` | WiFi and SNTP, both off unless an SSID is configured, and the radio on only at boot and while the voice loop wants it |
 | `firmware/main/voice.c` | the device half of the voice loop: the codecs, `esp_http_client`, and a task. The counterpart of `host/voice.c`, and the same shape again |
 | `firmware/components/kai_ui/` | a `CMakeLists.txt` and nothing else: it compiles `ui.c` and the three fonts out of the repo's `ui/` |
 | `firmware/components/kai_turn/` | the same trick for `voice/turn.c`, and it `REQUIRES` nothing at all |
@@ -372,8 +372,9 @@ read, the status refresh — so there is no lock to take and none to forget.
 enough to render from, and `CONFIG_FREERTOS_HZ` is 1000 so the loop's 1 ms
 floor really is 1 ms.
 
-`net.c` is the one thing outside that task, and all it ever does is set a flag
-the loop reads.
+`net.c` is the one thing outside that task. What it hands the loop is a flag;
+what it takes from the voice task is `net_want()`, which starts and stops the
+radio under a mutex of its own and never touches LVGL.
 
 ### What the device can answer
 
@@ -446,7 +447,8 @@ same way, by hand, through `dev_read()` and `dev_write()` in `board.c`.
 The PCF85063 keeps counting while the chip is off, so the watch has the time
 before it has a network. `clock_from_rtc()` in `main.c` reads it at boot and
 sets the system clock from it — `clock set from the RTC` in the log — and
-SNTP, when the radio is up, corrects the system clock and writes the RTC
+SNTP, whenever the radio is up — at boot, and whenever someone speaks to the
+watch — corrects the system clock and writes the RTC
 back through `net.c`'s sync callback, so the next boot has the correction.
 A clock that has never been set says so in its seconds register, and the
 watch runs from boot until SNTP arrives, which is what the first boot did.
@@ -884,15 +886,31 @@ nothing is recorded and nothing goes on the wire. The alternative was every
 sentence said in the room, sent to the transcriber around the clock, which
 is where the battery went and where the room's conversations went too. A
 wrist that comes down before a word is said ends the wait rather than
-leaving a recording open on a dark watch. The radio stays associated
-through all of it, in modem sleep between beacons, because a fresh
-association costs four seconds on a raised wrist and every request is one
-the watch starts. `WAKE` in `voice/turn.c` is a table rather than one
+leaving a recording open on a dark watch. `WAKE` in `voice/turn.c` is a table rather than one
 string because Parakeet has never been shown that name and spells it a few
 different ways; it is the greeting that is matched, not the name alone, or
 *Kaiser* and half the German news would wake the watch. Whatever follows the
 greeting is the first turn, so `Hey Kai, hallo` wakes it and answers `hallo`
 in one go.
+
+**On the device the radio follows the voice, not the panel.** It is off
+while the watch is looked at in silence, and the first word is what turns it
+on: `record()` calls `net_want(true)` the moment the gate hears speech, so
+the watch joins the network while the sentence is still being said.
+`http_post()` waits up to `VOICE_JOIN_MS` for it. The radio goes off again
+when the sentence turns out not to be for the watch — `not for me`, nothing
+the transcriber could write, a cough, a wrist gone down — or when a
+conversation ends with a goodbye or the idle timeout, and the kept connection
+goes with it, because its socket does not survive the radio. The previous
+rule kept the station associated in modem sleep the whole time the watch was
+up, on the grounds that a fresh association costs about four seconds. On
+17 September 2026 it measured 1.8 s from `radio on` to `associated`, and
+started at the first word it left the transcription request waiting 499 ms
+— not worth a radio on all day. `net.c` also brings the radio up once at
+boot, until SNTP has answered or `NET_BOOT_HOLD_MS` has passed, and asks
+SNTP again every time it associates, so the RTC is corrected whenever
+anyone speaks to the watch. `radio on`, `associated`, `radio off` and
+`waited ... ms for the network` in the log are how to watch it.
 
 **The phrase is configuration, and `Hey Kai` is its default.** The platform
 hands `voice_wake_set()` a `|`-separated list of spellings at start-up —

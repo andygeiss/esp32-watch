@@ -35,10 +35,16 @@
  *   the shortest path through the pipeline; both live behind reply(), exactly
  *   as they do on the host.
  *
- * - **The microphone is open the whole time**, so every utterance in the room
- *   goes to the transcriber. That is what the host does because a Mac has no
- *   wake-word engine; here it is a choice, and the one worth revisiting
- *   first. ESP-SR would hear the name locally and open a connection only
+ * - **The radio follows the voice, not the panel.** It is off while the watch
+ *   is being looked at in silence, comes up the moment the gate hears
+ *   someone start to speak — so it joins while they are still talking — and
+ *   goes off again when that turns out not to be for the watch, or when the
+ *   conversation ends. http_post() waits for it.
+ *
+ * - **The microphone is open whenever the panel is lit**, so every utterance
+ *   said to a lit watch goes to the transcriber. That is what the host does
+ *   because a Mac has no wake-word engine; here it is a choice, and the one
+ *   worth revisiting first. ESP-SR would hear the name locally and open a connection only
  *   then — but its models do not include this watch's name, so that is a
  *   trained model away rather than a flag away.
  */
@@ -53,11 +59,16 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "net.h"
 #include "sdkconfig.h"
 #include "turn.h"
+
+/* How long a request waits for the radio to join. A fresh association has
+ * been seen to take about four seconds, and it starts at the first word. */
+#define VOICE_JOIN_MS 10000
 
 static const char * TAG = "voice";
 
@@ -249,6 +260,17 @@ static bool http_post(const char * path, const char * content_type,
     snprintf(url, sizeof(url), "%s://%s:%s%s",
              server.tls ? "https" : "http", server.host, server.port, path);
 
+    if (!net_is_up()) {
+        const int64_t from = esp_timer_get_time();
+        if (!net_wait_up(VOICE_JOIN_MS)) {
+            ESP_LOGE(TAG, "no network after %d s — is %s in range?",
+                     VOICE_JOIN_MS / 1000, WATCH_WLAN_SSID);
+            return false;
+        }
+        ESP_LOGI(TAG, "waited %d ms for the network",
+                 (int) ((esp_timer_get_time() - from) / 1000));
+    }
+
     /* Twice at most: once over the connection in hand, and once more over a
      * fresh one when the first attempt died without a status, which is what
      * a keep-alive the server has since dropped looks like. */
@@ -361,6 +383,9 @@ static size_t record(uint32_t patience_ms)
             continue;
         }
         if (voice_turn_feed(&turn, pcm + at, got) == VOICE_DONE) break;
+        /* The first word is the trigger: the radio joins while the rest of
+         * the sentence is still being said. Awake, it is already up. */
+        if (turn.heard && !atomic_load(&awake)) net_want(true);
     }
 
     atomic_store(&recording, false);
@@ -492,6 +517,14 @@ done:
     return ok;
 }
 
+/* The radio, let go. The kept connection goes with it: its socket would not
+ * survive the radio, and finding that out costs a failed request. */
+static void radio_release(void)
+{
+    client_drop();
+    net_want(false);
+}
+
 /* One pass is one utterance. Asleep, the only thing that matters about it is
  * whether the watch's name is in there; awake, all of it is something to
  * answer, except the goodbye. Both questions are voice/turn.c's to answer, so
@@ -509,9 +542,9 @@ static void loop(void * unused)
         const char * say;
         size_t samples;
 
-        /* No radio, no assistant: both services are on the other end of it.
-         * The watch keeps time and draws its corners meanwhile. */
-        if (!net_is_up()) {
+        /* No network configured, no assistant: both services are on the
+         * other end of it. The watch keeps time and draws its corners. */
+        if (!net_available()) {
             board_mic_close();
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -525,6 +558,7 @@ static void loop(void * unused)
          * went and where the room's conversations went too. */
         if (!atomic_load(&awake) && !board_display_lit()) {
             board_mic_close();
+            radio_release();
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
@@ -539,11 +573,15 @@ static void loop(void * unused)
                          VOICE_IDLE_MS / 1000);
                 atomic_store(&awake, false);
             }
+            if (!atomic_load(&awake)) radio_release(); /* a cough, or a wrist gone down */
             continue;
         }
 
-        if (!transcribe(pcm, samples, heard, sizeof(heard))) continue;
-        if (heard[0] == '\0') continue; /* the transcriber heard no words */
+        if (!transcribe(pcm, samples, heard, sizeof(heard)) || heard[0] == '\0') {
+            /* Failed, or the transcriber heard no words. */
+            if (!atomic_load(&awake)) radio_release();
+            continue;
+        }
 
         say = heard;
 
@@ -556,6 +594,7 @@ static void loop(void * unused)
                  * here is what makes a watch that will not wake impossible to
                  * diagnose. */
                 ESP_LOGI(TAG, "not for me: \"%s\"", heard);
+                radio_release();
                 continue;
             }
             ESP_LOGI(TAG, "woken by \"%s\"", heard);
@@ -566,6 +605,7 @@ static void loop(void * unused)
         else if (voice_is_goodbye(heard)) {
             ESP_LOGI(TAG, "\"%s\" — back to the clock", heard);
             atomic_store(&awake, false);
+            radio_release();
             continue;
         }
         else {
@@ -580,7 +620,7 @@ static void loop(void * unused)
 
     board_mic_close();
     board_speaker_close();
-    client_drop();
+    radio_release();
     worker = NULL;
     vTaskDelete(NULL);
 }
