@@ -58,7 +58,7 @@ def main():
     durations = [min(ms, MAX_HOLD_MS) for ms in durations]
 
     # One palette for the whole animation rather than one per frame. The faces
-    # are amber on black and nothing else, so there are few enough colours to
+    # are purple on black and nothing else, so there are few enough colours to
     # keep every one of them and hand the GIF exactly what was rendered.
     colours = set()
     for frame in frames:

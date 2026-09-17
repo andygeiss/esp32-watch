@@ -62,9 +62,9 @@ static const struct {
 #define CATCHLIGHT_SIZE (PUPIL_SIZE * CATCHLIGHT_PCT / 100)
 #define CATCHLIGHT_OFF  (PUPIL_SIZE * CATCHLIGHT_OFF_PCT / 100)
 
-/* And what the amber 0xFFB000 of a lit pixel reads back as through RGB565 —
+/* And what the purple 0xA855F7 of a lit pixel reads back as through RGB565 —
  * see check_pixels. */
-#define AMBER_565 ((31 << 11) | (44 << 5))
+#define PURPLE_565 ((21 << 11) | (21 << 5) | 30)
 
 /* Children of the screen, in the order ui_build() creates them. Neither face
  * has a button on it: the platform hears the watch's name and says so through
@@ -419,8 +419,10 @@ static void check_readouts(void)
     }
 }
 
-/* It has to actually draw, not just lay out. Amber 0xFFB000 comes back as
- * 0xFFB200 through RGB565, which is the round-trip, not a bug. */
+/* It has to actually draw, not just lay out. Purple 0xA855F7 is 0xAABE in
+ * RGB565 — five, six and five bits of it — which is the round trip, not a
+ * bug. Nothing drawn is brighter: every other lit pixel is that purple
+ * faded toward black. */
 static void check_pixels(void)
 {
     uint32_t i, lit = 0;
@@ -436,9 +438,7 @@ static void check_pixels(void)
     CHECK(lit > 5000, "only %u pixels are lit — is anything drawing?", lit);
     CHECK(lit < (PANEL_WIDTH * PANEL_HEIGHT) / 2,
           "%u pixels are lit — the background should be black", lit);
-    CHECK(((brightest >> 11) & 0x1F) == 31 && ((brightest >> 5) & 0x3F) == 44 &&
-          (brightest & 0x1F) == 0,
-          "the brightest pixel is 0x%04X, not amber", brightest);
+    CHECK(brightest == PURPLE_565, "the brightest pixel is 0x%04X, not purple", brightest);
 }
 
 int main(void)
@@ -492,7 +492,7 @@ int main(void)
           "%d px of black between two %d px eyes",
           lv_obj_get_x(child(EYE_RIGHT)) - right_of(child(EYE_LEFT)) - 1, EYE_SIZE);
 
-    /* And it has to be an eye, not a dot: a hole in an amber disc with a light
+    /* And it has to be an eye, not a dot: a hole in a purple disc with a light
      * caught in it. Only the pixels can say so — the geometry above is the
      * same either way. */
     {
@@ -500,19 +500,19 @@ int main(void)
         int32_t cy = lv_obj_get_y(child(EYE_LEFT)) + EYE_SIZE / 2;
 
         /* Well inside the pupil and away from the catchlight; midway between
-         * the pupil's edge and the eye's, where only amber can be; and the
+         * the pupil's edge and the eye's, where only purple can be; and the
          * middle of the catchlight itself. */
         int32_t in_pupil = PUPIL_SIZE / 4;
-        int32_t on_amber = (EYE_SIZE / 2 + PUPIL_SIZE / 2) / 2;
+        int32_t on_purple = (EYE_SIZE / 2 + PUPIL_SIZE / 2) / 2;
 
         lv_refr_now(display);
         CHECK(pixel_at(cx + in_pupil, cy + in_pupil) == 0,
               "the pupil is not a hole: 0x%04X in the middle of the eye",
               pixel_at(cx + in_pupil, cy + in_pupil));
-        CHECK(pixel_at(cx, cy - on_amber) == AMBER_565,
-              "the amber around the pupil reads 0x%04X",
-              pixel_at(cx, cy - on_amber));
-        CHECK(pixel_at(cx + CATCHLIGHT_OFF, cy + CATCHLIGHT_OFF) == AMBER_565,
+        CHECK(pixel_at(cx, cy - on_purple) == PURPLE_565,
+              "the purple around the pupil reads 0x%04X",
+              pixel_at(cx, cy - on_purple));
+        CHECK(pixel_at(cx + CATCHLIGHT_OFF, cy + CATCHLIGHT_OFF) == PURPLE_565,
               "no catchlight in the pupil: 0x%04X where it should be",
               pixel_at(cx + CATCHLIGHT_OFF, cy + CATCHLIGHT_OFF));
         CHECK(CATCHLIGHT_SIZE >= 6,
@@ -533,7 +533,7 @@ int main(void)
 
             for (i = 0; i < LASH_COUNT; i++) {
                 lash_point(eye, i, e == 1, &x, &y);
-                CHECK(pixel_at(x, y) == AMBER_565,
+                CHECK(pixel_at(x, y) == PURPLE_565,
                       "%s eye: lash %d reads 0x%04X at (%d,%d)",
                       e == 0 ? "left" : "right", i, pixel_at(x, y), x, y);
             }
@@ -551,7 +551,7 @@ int main(void)
     /* A mirrored pair has to weigh the same on both sides of the panel. This
      * is the check that an eye which is not drawn from its own centre fails:
      * the fan slides the same way on both eyes, which is out into the black on
-     * one of them and into the amber on the other, and every point probed
+     * one of them and into the purple on the other, and every point probed
      * above still lands on a lash. */
     {
         uint32_t left, right;

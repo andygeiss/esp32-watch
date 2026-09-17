@@ -38,9 +38,10 @@ LV_FONT_DECLARE(ui_font_assistant_18);
 #define UI_SYMBOL_SPEAKER "\xEF\x80\xA8"
 #define UI_SYMBOL_MIC     "\xEF\x84\xB0"
 
-/* Amber-on-black, the way a VFD readout looks. */
+/* Purple on black. The purple is linkyourskill.ai's brand colour, --accent-1
+ * in its design system (lys-design-system, tokens/colors.css). */
 #define UI_COLOR_BG     0x000000
-#define UI_COLOR_AMBER  0xFFB000
+#define UI_COLOR_PURPLE 0xA855F7
 
 /* The panel, same here as on the device — see main.c. */
 #define UI_PANEL_WIDTH  410
@@ -221,7 +222,7 @@ static lv_obj_t * digits_create(lv_obj_t * parent, int32_t offset_x)
     lv_obj_t * label = lv_label_create(parent);
 
     lv_obj_set_style_text_font(label, &ui_font_digits_118, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_PURPLE), LV_PART_MAIN);
     lv_label_set_text(label, "00"); /* the font holds digits only */
 
     lv_obj_align(label, LV_ALIGN_CENTER, offset_x, UI_TIME_OFFSET_Y);
@@ -236,7 +237,7 @@ static lv_obj_t * stacked_create(lv_obj_t * parent, const lv_font_t * font,
     lv_obj_t * label = lv_label_create(parent);
 
     lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_PURPLE), LV_PART_MAIN);
     lv_label_set_text(label, text);
 
     lv_obj_align(label, LV_ALIGN_CENTER, 0, offset_y);
@@ -284,7 +285,7 @@ static void eye_ext_draw_size(lv_event_t * e)
  * An lv_arc each is the obvious way and the wrong one: an arc puts its centre
  * min(w, h) / 2 in from its own top-left corner, so the moment the eye
  * flattens the whole ring slides left, and the left eye's lashes swing out
- * into the black while the right eye's sink into the amber and disappear. A
+ * into the black while the right eye's sink into the purple and disappear. A
  * rotated bar is worse again — LV_DRAW_TRANSFORM_USE_MATRIX is 0, so LVGL can
  * only honour a rotation by rendering the object into a layer of its own, and
  * eight of those a frame is not a thing to hand the device.
@@ -312,7 +313,7 @@ static void eye_draw_lashes(lv_event_t * e)
     mirror = cx > UI_PANEL_WIDTH / 2; /* the right eye is the one to mirror */
 
     lv_draw_line_dsc_init(&lash);
-    lash.color = lv_color_hex(UI_COLOR_AMBER);
+    lash.color = lv_color_hex(UI_COLOR_PURPLE);
     lash.opa = lv_obj_get_style_opa_recursive(eye, LV_PART_MAIN);
     lash.width = UI_LASH_WIDTH;
     lash.round_start = 1;
@@ -343,7 +344,7 @@ static void eye_draw_lashes(lv_event_t * e)
  * parent's. So there is still one animation per property per eye. */
 static lv_obj_t * eye_create(lv_obj_t * parent, int32_t offset_x)
 {
-    lv_obj_t * eye = disc_create(parent, UI_GROUP_WIDTH, UI_GROUP_HEIGHT, UI_COLOR_AMBER);
+    lv_obj_t * eye = disc_create(parent, UI_GROUP_WIDTH, UI_GROUP_HEIGHT, UI_COLOR_PURPLE);
     lv_obj_t * pupil;
     lv_obj_t * catchlight;
 
@@ -353,7 +354,7 @@ static lv_obj_t * eye_create(lv_obj_t * parent, int32_t offset_x)
 
     pupil = disc_create(eye, lv_pct(UI_PUPIL_PCT), lv_pct(UI_PUPIL_PCT), UI_COLOR_BG);
     catchlight = disc_create(pupil, lv_pct(UI_CATCHLIGHT_PCT), lv_pct(UI_CATCHLIGHT_PCT),
-                             UI_COLOR_AMBER);
+                             UI_COLOR_PURPLE);
 
     lv_obj_align(eye, LV_ALIGN_CENTER, offset_x, UI_TIME_OFFSET_Y);
     lv_obj_center(pupil);
@@ -378,7 +379,7 @@ static lv_obj_t * corner_create(lv_obj_t * parent, lv_align_t align,
     bool top  = align == LV_ALIGN_TOP_LEFT || align == LV_ALIGN_TOP_RIGHT;
 
     lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COLOR_PURPLE), LV_PART_MAIN);
     lv_label_set_text(label, text);
     lv_obj_align(label, align, left ? UI_EDGE_MARGIN : -UI_EDGE_MARGIN,
                  top ? UI_EDGE_MARGIN : -UI_EDGE_MARGIN);

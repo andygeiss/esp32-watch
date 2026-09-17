@@ -553,7 +553,9 @@ compiles the WiFi and battery symbols into it.
 
 `ui_build()` puts two views on one screen and morphs between them.
 
-**Clock.** Black background, amber `0xFFB000` throughout: the hour group 94 px
+**Clock.** Black background, purple `0xA855F7` throughout — `--accent-1`, the
+brand purple of linkyourskill.ai, out of its design system's
+`tokens/colors.css`: the hour group 94 px
 left of centre, the minute group 94 px right of it, then `MM/DD` and its
 weekday centred below them. One 1 Hz `lv_timer` refreshes all four labels.
 
@@ -585,7 +587,7 @@ views — the corners are a status layer over whichever face is showing, and
 none of it stops mattering while the assistant is listening. The values arrive
 through `ui_status_set()` — see the host/device boundary above.
 
-**Assistant.** The same two groups, now the assistant's two eyes: 69 px amber
+**Assistant.** The same two groups, now the assistant's two eyes: 69 px purple
 circles in the same places, with the digits and the date faded out. Each holds
 a pupil — a hole the colour of the background, half of what the lids leave,
 28 px — and a catchlight in the pupil, 8 px, up and to the left in both because
@@ -652,7 +654,7 @@ each is the obvious answer and looks right at rest, which is what makes it the
 expensive one to find out about: an arc puts its centre `min(w, h) / 2` in
 from its own top-left corner, so the moment the eye flattens the whole ring
 slides left, and the left eye's lashes swing out into the black while the
-right eye's sink into the amber and disappear. A rotated bar is worse again —
+right eye's sink into the purple and disappear. A rotated bar is worse again —
 `LV_DRAW_TRANSFORM_USE_MATRIX` is 0, so LVGL can only honour a rotation by
 rendering the object into a layer of its own, and eight of those a frame is
 not a thing to hand the device.
@@ -1446,7 +1448,7 @@ The other eight are the eye's, and were tried the same way: the eye back at
 120 px, which closes the gap between the pair, and the eye down at 40 px, which
 leaves a catchlight of 4 px that no longer reads as one; the pupil given a size
 of its own instead of a percentage, and the lids' padding taken off, which both
-leave it sitting in a shut eye; the pupil filled in amber rather than left as a
+leave it sitting in a shut eye; the pupil filled in purple rather than left as a
 hole; the catchlight removed, and the catchlight hung off the eye instead of
 the pupil; and the pupil left clickable, which would swallow the touch the eye
 lets through. The three of them that read pixels out of the buffer are the only
@@ -1471,7 +1473,7 @@ itself. It passes every other check in the file, because at rest the eye is
 square and the two are the same thing. What catches it is counting the lit
 pixels either side of the centre line with the lid part way down: the fan
 slides the same way on both eyes, which is out into the black on one and into
-the amber on the other. That check needs one care of its own — `lv_refr_now()`
+the purple on the other. That check needs one care of its own — `lv_refr_now()`
 steps the animations as well as drawing them, so the height that goes in the
 failure message has to be read back after it, not before.
 
@@ -1495,8 +1497,9 @@ Two things to know before writing another renderer like it:
   morph and a 3.6 s blink pause cost nothing, and it is why the test can look
   at a frame part-way through an animation.
 
-Amber `0xFFB000` reads back as `#FFB200` after the RGB565 round-trip — that is
-correct, not a bug, and the test asserts exactly that value.
+Purple `0xA855F7` is `0xAABE` in RGB565 and reads back as `#AD55F7` or
+`#AC55F6` depending on how the five bits are widened again — that is correct,
+not a bug, and the test asserts exactly the RGB565 value.
 
 ## The animation in README.md
 
@@ -1523,11 +1526,11 @@ Four things about it are deliberate:
   double speed.
 - **A frame identical to the one before it is folded into that one's
   duration**, in `demo.c`, which is why 11 s of animation is 34 frames and
-  131 kB. Nothing on either face moves except during a morph or a blink; the
+  118 kB. Nothing on either face moves except during a morph or a blink; the
   render mode is FULL, so the buffer is a whole frame even on the refreshes
   where LVGL redrew only a corner readout.
-- **One palette for the whole GIF, and every colour kept.** Amber on black
-  comes to 91 colours after the RGB565 round-trip, well inside the 256 a GIF
+- **One palette for the whole GIF, and every colour kept.** Purple on black
+  comes to 66 colours after the RGB565 round-trip, well inside the 256 a GIF
   palette holds, so nothing is quantised away and no frame carries a palette
   of its own.
 - **`MAX_HOLD_MS` caps how long a still frame is held.** The watch really does

@@ -21,7 +21,7 @@ the morph does, which is what makes switching back to the clock cancel it with
 no bookkeeping, and the pupil closes with it because the lids leave nothing
 between them. _Avoid: wink, idle animation._
 
-**Catchlight** — the amber dot in an eye's pupil, up and to the left in both
+**Catchlight** — the purple dot in an eye's pupil, up and to the left in both
 eyes because there is one light in the room. Thirty per cent of the pupil and
 offset by a fifth of it, so a blink takes it along. It is small and it is most
 of what tells an eye from a dot. _Avoid: highlight, glint, sparkle, spark._
@@ -55,7 +55,7 @@ comes closer than 32 px to an edge of the panel. The 94 px group offset and the
 four corner readouts are derived from it, and it is what caps the digits at
 118 px. _Avoid: padding, inset, safe area._
 
-**Eye** — one of the two amber circles the assistant looks out of, 69 px
+**Eye** — one of the two purple circles the assistant looks out of, 69 px
 across, with a pupil, a catchlight and four lashes. Each starts life as its
 digit group's own box — same size, same centre, already round, invisible — so
 the morph is that box changing shape rather than a new thing appearing. It is
@@ -99,7 +99,7 @@ Also the half of any build that knows which of the two it is: window or panel,
 mouse or touch, `SDL_GetTicks` or `esp_timer`. _Avoid: PC, desktop, simulator
 side._
 
-**Lash** — one of the four amber strokes on an eye's upper-outer arc, and the
+**Lash** — one of the four purple strokes on an eye's upper-outer arc, and the
 whole of what makes the pair a woman's rather than anybody's. Longest at the
 outer corner, 22 px, shortening to 14 px going in; the right eye's four are the
 left's mirrored about the vertical. Drawn by the eye rather than built out of

@@ -25,7 +25,7 @@ building the watch face.
 
 **Done means.**
 
-- `make run` opens a 410 x 502 window showing the time and the date in amber
+- `make run` opens a 410 x 502 window showing the time and the date in purple
   on black, and saying `Hey Kai` morphs the digits into the assistant's two
   eyes; a goodbye or half a minute of quiet morphs them back. Neither face has
   anything on it to press.

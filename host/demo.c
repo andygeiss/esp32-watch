@@ -100,7 +100,7 @@ static void capture(void)
         uint8_t rgb[3];
 
         /* RGB565 back out to eight bits a channel, the way the panel would
-         * show it: amber 0xFFB000 reads back as 0xFFB200 and that is the
+         * show it: purple 0xA855F7 reads back as 0xAC55F6 and that is the
          * round trip, not a bug. */
         rgb[0] = (uint8_t) (((pixel >> 11) & 0x1F) * 255 / 31);
         rgb[1] = (uint8_t) (((pixel >> 5) & 0x3F) * 255 / 63);

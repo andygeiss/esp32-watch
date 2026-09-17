@@ -17,7 +17,7 @@ make flash      # onto the board, then its log
 the `ui.c` the firmware compiles, by `tools/gen_demo.py`, so it cannot drift
 from what the watch does.*
 
-Amber on black, the way a VFD readout looks. Say `Hey Kai` and each digit group
+Purple on black — the brand purple of linkyourskill.ai. Say `Hey Kai` and each digit group
 pulls in to an eye over 400 ms while the digits fade off the front of it — a
 69 px circle with a pupil in it, a catchlight in that and four lashes fanning
 off its outer corner, a good deal narrower than the digits were, because it is
