@@ -60,11 +60,27 @@ static void clock_from_rtc(void)
 }
 
 /* Raise to wake. The panel is lit for WAKE_HOLD_MS after a tap, or after the
- * watch moves — the acceleration vector changing by WAKE_MOVE_G between two
- * samples a tenth of a second apart, which a watch on a desk never does and
- * a lifted wrist always does — and goes dark after that, or at once when the
- * glass is turned toward the ground. Nothing under ui.h knows: rendering
- * carries on, so the panel lights on the present frame.
+ * watch moves the way a wrist does when it is raised to be read, and goes
+ * dark after that, or at once when the glass is turned toward the ground.
+ * Nothing under ui.h knows: rendering carries on, so the panel lights on the
+ * present frame.
+ *
+ * Moving is the smoothed acceleration vector — the mean of the last
+ * WAKE_SMOOTH samples — having changed by more than WAKE_MOVE_G against the
+ * same mean WAKE_SPAN samples earlier. It used to be two raw samples a tenth
+ * of a second apart changing by 0.25 g, and that lit the panel for a few
+ * millimetres: a single sample catches the spike of a knock or a twitch, and
+ * a spike is exactly as large as a raised wrist for the one sample it lasts.
+ * The mean takes the spike out, and the half-second span asks for the
+ * movement to have gone somewhere — which a raised arm does, mostly by
+ * turning the glass toward the eyes, and a jiggle does not. Every lit panel
+ * logs the change that lit it, which is the number to tune against a wrist.
+ *
+ * WAKE_MOVE_G was read off a wrist, not guessed. Three raises of about 10 cm
+ * peaked at 0.62, 0.85 and 1.08 g; small movements — a few millimetres, a
+ * knock on the table, typing — at 0.42, 0.33 and 0.23 g. Half a g sits in
+ * that gap. Reaching for a cup is as big as a raise and lights the panel,
+ * which no threshold on size alone can help.
  *
  * There is deliberately no "face up" test. There was one, and it lit the
  * desk and not the wrist: on this chip a watch lying glass-up reads a full g
@@ -74,29 +90,40 @@ static void clock_from_rtc(void)
  * is the glass turned over, which the desk reading says is +1. */
 #define WAKE_PERIOD_MS 100
 #define WAKE_HOLD_MS   8000
-#define WAKE_MOVE_G    0.25f
+#define WAKE_SMOOTH    3     /* samples in each mean: 0.3 s */
+#define WAKE_SPAN      5     /* samples between the two means: 0.5 s */
+#define WAKE_MOVE_G    0.5f
 #define WAKE_DOWN_G    0.6f
 #define WAKE_DOWN_AXIS 2
 
 static void wake_tick(lv_timer_t * timer)
 {
-    static float    last[3];
-    static bool     have_last;
+    enum { N = WAKE_SMOOTH + WAKE_SPAN };
+    static float    hist[N][3];     /* the last N samples, newest at `head` */
+    static int      head, have;
     static uint32_t lit_until = WAKE_HOLD_MS; /* the boot face is worth a look */
     static bool     lit = true;
-    float g[3];
+    float g[3], change = 0;
     uint32_t now = tick_ms();
     bool moved = false, face_down = false;
 
     LV_UNUSED(timer);
 
     if (board_motion_read(g)) {
-        if (have_last) {
-            float dx = g[0] - last[0], dy = g[1] - last[1], dz = g[2] - last[2];
-            moved = sqrtf(dx * dx + dy * dy + dz * dz) > WAKE_MOVE_G;
+        head = (head + 1) % N;
+        memcpy(hist[head], g, sizeof g);
+        if (have < N) have++;
+
+        if (have == N) {
+            float d[3] = { 0, 0, 0 };
+            for (int i = 0; i < WAKE_SMOOTH; i++) {
+                const float * recent = hist[(head - i + N) % N];
+                const float * before = hist[(head - WAKE_SPAN - i + 2 * N) % N];
+                for (int k = 0; k < 3; k++) d[k] += (recent[k] - before[k]) / WAKE_SMOOTH;
+            }
+            change = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            moved = change > WAKE_MOVE_G;
         }
-        memcpy(last, g, sizeof last);
-        have_last = true;
         face_down = g[WAKE_DOWN_AXIS] > WAKE_DOWN_G;
     }
 
@@ -108,7 +135,8 @@ static void wake_tick(lv_timer_t * timer)
 
     if (((int32_t) (lit_until - now) > 0) != lit) {
         lit = !lit;
-        ESP_LOGI(TAG, "panel %s", lit ? "lit" : "dark");
+        if (lit && moved) ESP_LOGI(TAG, "panel lit, moved %.2f g", change);
+        else ESP_LOGI(TAG, "panel %s", lit ? "lit" : "dark");
     }
     board_display_sleep(!lit);
 }

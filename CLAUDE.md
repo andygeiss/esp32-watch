@@ -465,9 +465,10 @@ The panel is lit when someone wants to read it and dark otherwise, and the
 QMI8658's accelerometer is what says which. `wake_tick()` in `main.c` reads
 the acceleration vector ten times a second. Two things light the panel for
 eight seconds: a tap on the glass, which the touch controller's interrupt
-already reports as a flag, and the watch *moving* — the vector changing by
-more than a quarter g between two samples. A watch on a desk never moves; a
-lifted wrist always does. The glass turned toward the ground goes dark at
+already reports as a flag, and the watch *moving* — the mean of the last
+three samples having changed by more than half a g against the same mean
+half a second earlier. A watch on a desk never moves; a lifted wrist always
+does. The glass turned toward the ground goes dark at
 once, and the boot face is held eight seconds, so a watch that has just
 started can be looked at. A conversation keeps the panel lit — the eyes stay
 up until the goodbye, and eight seconds after — and the microphone follows
@@ -482,8 +483,21 @@ because the glass faces the eyes and not the sky. Two flashes went by
 guessing the sign of that test before a log of the raw vector, taken while
 the watch was actually being read, showed there was no sign that worked.
 So movement is the whole of the wake, and orientation is only ever a reason
-to go dark. The log says `panel lit` and `panel dark` on every change, which
-is how the thresholds get tuned against a real wrist.
+to go dark. The log says `panel lit, moved 0.62 g` and `panel dark` on every
+change, which is how the thresholds get tuned against a real wrist.
+
+**The movement is a smoothed change, because a raw one lit the panel for a
+few millimetres.** The first rule compared two raw samples a tenth of a
+second apart against a quarter g, and a single sample catches the spike of a
+knock or a twitch at full size. Averaging three samples takes the spike out,
+and comparing against half a second earlier asks for the watch to have
+actually gone somewhere — mostly turned the glass toward the eyes. The half
+g was read off a wrist on 17 September 2026 with the change logged ten times
+a second: three raises of about 10 cm peaked at 0.62, 0.85 and 1.08 g, and
+small movements — a few millimetres, a knock on the table, typing — at 0.42,
+0.33 and 0.23 g. Reaching for a cup peaked anywhere from 0.57 to 1.5 g and
+lights the panel; that is the same movement as a raise as far as size can
+tell, and no threshold on size will separate them.
 
 Only the accelerometer runs, at ±2 g and 125 Hz. The gyroscope would cost
 ten times the current to answer the same question. Dark is
